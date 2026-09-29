@@ -7,10 +7,10 @@ The application compiles to the command-line binary `rukia` and starts playing a
 ## Features
 
 - **Native Terminal Playback**: Embeds a Spotify Connect receiver using `go-librespot` with PulseAudio/PipeWire audio output.
-- **Spotify Web API Integration**: Full OAuth 2.0 authorization code flow with automatic token persistence and refresh.
-- **HTTPS Callback Server**: Built-in HTTPS callback handler with ephemeral in-memory TLS certificate on `https://127.0.0.1:8443/callback`.
-- **Flexible Playlist Arguments**: Supports raw playlist IDs, IDs with query parameters, full Spotify URLs, and Spotify URIs.
-- **Cyan TUI Theme**: Designed to match the Spotify CLI theme with header stats, track listing (Artist - Album, Title, Duration), and bottom progress bar.
+- **Spotify Web API Integration**: Full OAuth 2.0 authorization code flow with automatic token refresh, structured error parsing, and 429/5xx backoff retries.
+- **Hardened OAuth Callback Server**: Loopback-restricted HTTPS callback handler with ephemeral in-memory TLS certificate and masked terminal credentials entry.
+- **Flexible Playlist Arguments**: Supports raw playlist IDs, IDs with query parameters, full Spotify URLs (`open.spotify.com`), and Spotify URIs.
+- **Cyan TUI Theme**: Designed to match the Spotify CLI theme with header stats, track listing (Artist - Album, Title, Duration), shuffle/repeat badges, and bottom progress bar with transient error notices.
 - **Exit Confirmation Dialog**: Modal dialog (`Ctrl+q`, `q`, `Ctrl+c`) with `<No>` and `<Yes>` confirmation buttons.
 
 ## Prerequisites
@@ -28,6 +28,7 @@ Build the binary using `make`:
 ```bash
 git clone https://github.com/chavao/rukia-player.git
 cd rukia-player
+make check  # runs formatting, vet, and race detection
 make build
 ```
 
@@ -36,7 +37,7 @@ The compiled executable will be placed in `./bin/rukia`.
 To install globally to your `$GOPATH/bin`:
 
 ```bash
-go install ./cmd/rukia
+make install
 ```
 
 ## Quick Start
@@ -92,7 +93,8 @@ Alternatively, credentials can be provided via environment variables:
 
 ## Architecture
 
-- **`cmd/rukia/`**: Application entry point, CLI flag and argument handling.
+- **`cmd/rukia/`**: Application entry point.
+- **`internal/app/`**: Application lifecycle orchestration, CLI argument parsing, and error boundaries.
 - **`internal/auth/`**: Spotify OAuth 2.0 flow, in-memory TLS certificate generation, HTTPS callback server, configuration persistence.
 - **`internal/spotify/`**: Spotify Web API client, playlist metadata and track pagination, player controls.
 - **`internal/player/`**: Embedded `go-librespot` daemon lifecycle and PulseAudio sink.

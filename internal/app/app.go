@@ -17,7 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var Version = "1.0.0"
+var Version = "dev"
 
 // PrintUsage prints CLI usage documentation to w.
 func PrintUsage(w io.Writer) {

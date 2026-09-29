@@ -2,16 +2,19 @@
 
 BINARY_NAME=rukia
 BIN_DIR=bin
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -X github.com/Chavao/rukia-player/internal/app.Version=$(VERSION)
+
 export PKG_CONFIG_PATH := /usr/lib/x86_64-linux-gnu/pkgconfig:$(PKG_CONFIG_PATH)
 
 all: check build
 
 build:
 	@mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/rukia
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/rukia
 
 install:
-	go install ./cmd/rukia
+	go install -ldflags "$(LDFLAGS)" ./cmd/rukia
 
 fmt:
 	gofmt -s -w .
