@@ -186,6 +186,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 			return nil, fmt.Errorf("failed to fetch tracks page: %w", err)
 		}
 
+		// A 403 from /items is a permission denial, not a signal to try /tracks.
 		if tResp.StatusCode == http.StatusNotFound {
 			tResp.Body.Close()
 			// Fallback to legacy /tracks endpoint

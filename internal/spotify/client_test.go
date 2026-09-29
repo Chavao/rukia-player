@@ -115,6 +115,34 @@ func TestGetPlaylistItemsEndpoint(t *testing.T) {
 	}
 }
 
+func TestGetPlaylistDoesNotFallbackOnForbiddenItems(t *testing.T) {
+	legacyCalls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/playlists/test":
+			w.Write([]byte(`{"id":"test","items":{"total":1}}`))
+		case "/playlists/test/items":
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":{"status":403,"message":"Forbidden"}}`))
+		case "/playlists/test/tracks":
+			legacyCalls++
+			w.Write([]byte(`{"items":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	_, err := c.GetPlaylist(context.Background(), "test")
+	apiErr, ok := err.(*APIError)
+	if !ok || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected forbidden API error, got %v", err)
+	}
+	if legacyCalls != 0 {
+		t.Fatalf("expected no legacy fallback, got %d requests", legacyCalls)
+	}
+}
+
 func TestTrackAndPlaylistStructures(t *testing.T) {
 	track := Track{
 		ID:         "123",
