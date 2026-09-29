@@ -16,8 +16,8 @@ import (
 type tickMsg time.Time
 type pollMsg time.Time
 type playbackStateMsg *spotify.PlaybackState
-type playerErrorMsg error
-type errMsg error
+type playerErrorMsg struct{ err error }
+type errMsg struct{ err error }
 type playbackChangedMsg struct {
 	playing bool
 	err     error
@@ -26,11 +26,11 @@ type actionResultMsg struct {
 	action string
 	err    error
 }
-type clearErrorMsg struct{}
+type clearErrorMsg struct{ generation uint64 }
 
-func clearErrorCmd(d time.Duration) tea.Cmd {
+func clearErrorCmd(d time.Duration, generation uint64) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg {
-		return clearErrorMsg{}
+		return clearErrorMsg{generation: generation}
 	})
 }
 
@@ -75,9 +75,10 @@ type Model struct {
 	exitDialog    ExitDialog
 	keys          KeyMap
 
-	width  int
-	height int
-	err    error
+	width           int
+	height          int
+	err             error
+	errorGeneration uint64
 }
 
 // NewModel creates an initialized Bubble Tea model.
@@ -150,7 +151,7 @@ func (m *Model) waitForPlayerErrorCmd() tea.Cmd {
 		if !ok || err == nil {
 			return nil
 		}
-		return playerErrorMsg(err)
+		return playerErrorMsg{err: err}
 	}
 }
 
@@ -173,7 +174,7 @@ func (m *Model) pollPlaybackCmd() tea.Cmd {
 
 		state, err := m.spotifyClient.GetPlaybackState(ctx)
 		if err != nil {
-			return errMsg(err)
+			return errMsg{err: err}
 		}
 		return playbackStateMsg(state)
 	}
@@ -223,14 +224,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case playerErrorMsg:
-		m.err = fmt.Errorf("audio player error: %w", error(msg))
-		cmds = append(cmds, m.waitForPlayerErrorCmd(), clearErrorCmd(5*time.Second))
+		cmds = append(cmds, m.waitForPlayerErrorCmd(), m.showError(fmt.Errorf("audio player error: %w", msg.err), 5*time.Second))
 
 	case playbackChangedMsg:
 		m.playbackPending = false
 		if msg.err != nil {
-			m.err = fmt.Errorf("failed to toggle playback: %w", msg.err)
-			cmds = append(cmds, clearErrorCmd(3*time.Second))
+			cmds = append(cmds, m.showError(fmt.Errorf("failed to toggle playback: %w", msg.err), 3*time.Second))
 		} else {
 			m.confirmedPlaying = msg.playing
 		}
@@ -245,16 +244,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionResultMsg:
 		if msg.err != nil {
-			m.err = fmt.Errorf("failed to %s: %w", msg.action, msg.err)
-			cmds = append(cmds, clearErrorCmd(3*time.Second))
+			cmds = append(cmds, m.showError(fmt.Errorf("failed to %s: %w", msg.action, msg.err), 3*time.Second))
 		}
 
 	case errMsg:
-		m.err = msg
-		cmds = append(cmds, clearErrorCmd(3*time.Second))
+		cmds = append(cmds, m.showError(msg.err, 3*time.Second))
 
 	case clearErrorMsg:
-		m.err = nil
+		if msg.generation == m.errorGeneration {
+			m.err = nil
+		}
 
 	case tea.KeyMsg:
 		// When exit modal is displayed, route keys exclusively to modal
@@ -357,6 +356,12 @@ func (m *Model) togglePlayback() tea.Cmd {
 	}
 	m.playbackPending = true
 	return m.togglePlayPauseCmd(m.isPlaying)
+}
+
+func (m *Model) showError(err error, duration time.Duration) tea.Cmd {
+	m.err = err
+	m.errorGeneration++
+	return clearErrorCmd(duration, m.errorGeneration)
 }
 
 func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {

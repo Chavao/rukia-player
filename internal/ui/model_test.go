@@ -189,7 +189,7 @@ func TestModelActionResultMsgAndErrorDisplay(t *testing.T) {
 	}
 
 	// clearErrorMsg clears the error
-	m, _ = model.Update(clearErrorMsg{})
+	m, _ = model.Update(clearErrorMsg{generation: model.errorGeneration})
 	model = m.(*Model)
 	if model.err != nil {
 		t.Errorf("expected model.err to be nil after clearErrorMsg, got: %v", model.err)
@@ -197,6 +197,21 @@ func TestModelActionResultMsgAndErrorDisplay(t *testing.T) {
 	view = model.View()
 	if strings.Contains(view, "⚠") {
 		t.Error("view should not show error indicator after clearErrorMsg")
+	}
+}
+
+func TestOlderErrorTimerDoesNotClearNewError(t *testing.T) {
+	model := NewModel(nil, nil, nil, nil, "dev-1")
+	model.Update(errMsg{err: assertErr("first")})
+	firstGeneration := model.errorGeneration
+	model.Update(errMsg{err: assertErr("second")})
+	model.Update(clearErrorMsg{generation: firstGeneration})
+	if model.err == nil || model.err.Error() != "second" {
+		t.Fatalf("older timer cleared newer error: %v", model.err)
+	}
+	model.Update(clearErrorMsg{generation: model.errorGeneration})
+	if model.err != nil {
+		t.Fatalf("current timer did not clear error: %v", model.err)
 	}
 }
 
@@ -215,7 +230,7 @@ func TestWaitForPlayerErrorCmd(t *testing.T) {
 	}()
 
 	// Simulate handling playerErrorMsg
-	m, cmd := model.Update(playerErrorMsg(assertErr("pulseaudio died")))
+	m, cmd := model.Update(playerErrorMsg{err: assertErr("pulseaudio died")})
 	model = m.(*Model)
 
 	if model.err == nil || !strings.Contains(model.err.Error(), "pulseaudio died") {
