@@ -122,7 +122,10 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 		return nil, err
 	}
 
-	callbackCh, err := StartHTTPSCallbackServer(ctx, o.appCfg.RedirectURI)
+	loginCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	callbackCh, err := StartHTTPSCallbackServer(loginCtx, o.appCfg.RedirectURI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start HTTPS callback server: %w", err)
 	}

@@ -75,3 +75,29 @@ func TestHTTPSCallbackServerExplicitPort(t *testing.T) {
 		t.Fatal("timed out waiting for callback result")
 	}
 }
+
+func TestHTTPSCallbackServerContextCancel(t *testing.T) {
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	redirectURI := "https://127.0.0.1:18444/callback"
+
+	_, err := StartHTTPSCallbackServer(ctx1, redirectURI)
+	if err != nil {
+		t.Fatalf("failed to start first HTTPS server: %v", err)
+	}
+
+	// Cancel context to stop server
+	cancel1()
+
+	// Wait briefly for listener to be closed
+	time.Sleep(100 * time.Millisecond)
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	// Starting server on same port should succeed now
+	_, err = StartHTTPSCallbackServer(ctx2, redirectURI)
+	if err != nil {
+		t.Fatalf("failed to start second HTTPS server on same port after cancel: %v", err)
+	}
+}
+
