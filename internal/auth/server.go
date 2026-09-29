@@ -25,6 +25,13 @@ type CallbackResult struct {
 	Error error
 }
 
+// CallbackServer exposes the callback result and listener lifecycle.
+type CallbackServer struct {
+	Results <-chan CallbackResult
+	Addr    string
+	Done    <-chan struct{}
+}
+
 // GenerateSelfSignedCert generates an in-memory TLS certificate for 127.0.0.1 / localhost.
 func GenerateSelfSignedCert() (tls.Certificate, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -74,25 +81,37 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 
 // StartHTTPSCallbackServer starts a background HTTPS server to capture the Spotify OAuth callback.
 func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-chan CallbackResult, error) {
-	ch, _, err := StartHTTPSCallbackServerWithAddr(ctx, redirectURLStr)
-	return ch, err
+	callback, err := StartCallbackServer(ctx, redirectURLStr)
+	if err != nil {
+		return nil, err
+	}
+	return callback.Results, nil
 }
 
 // StartHTTPSCallbackServerWithAddr starts a background HTTPS or HTTP server to capture the Spotify OAuth callback
 // and returns the result channel and the bound listener address (useful for dynamic port allocation with :0).
 func StartHTTPSCallbackServerWithAddr(ctx context.Context, redirectURLStr string) (<-chan CallbackResult, string, error) {
+	callback, err := StartCallbackServer(ctx, redirectURLStr)
+	if err != nil {
+		return nil, "", err
+	}
+	return callback.Results, callback.Addr, nil
+}
+
+// StartCallbackServer starts the callback listener and exposes its termination.
+func StartCallbackServer(ctx context.Context, redirectURLStr string) (*CallbackServer, error) {
 	u, err := url.Parse(redirectURLStr)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid redirect URI: %w", err)
+		return nil, fmt.Errorf("invalid redirect URI: %w", err)
 	}
 
 	hostname := u.Hostname()
 	if hostname != "127.0.0.1" && hostname != "localhost" && hostname != "::1" {
-		return nil, "", fmt.Errorf("insecure redirect URI host: %s; must be localhost or 127.0.0.1", hostname)
+		return nil, fmt.Errorf("insecure redirect URI host: %s; must be localhost or 127.0.0.1", hostname)
 	}
 
 	if u.Scheme != "https" && u.Scheme != "http" {
-		return nil, "", fmt.Errorf("unsupported redirect URI scheme: %s; must be http or https", u.Scheme)
+		return nil, fmt.Errorf("unsupported redirect URI scheme: %s; must be http or https", u.Scheme)
 	}
 
 	hostPort := u.Host
@@ -108,7 +127,7 @@ func StartHTTPSCallbackServerWithAddr(ctx context.Context, redirectURLStr string
 	if u.Scheme == "https" {
 		cert, err := GenerateSelfSignedCert()
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to generate TLS cert: %w", err)
+			return nil, fmt.Errorf("failed to generate TLS cert: %w", err)
 		}
 
 		tlsConfig := &tls.Config{
@@ -117,16 +136,24 @@ func StartHTTPSCallbackServerWithAddr(ctx context.Context, redirectURLStr string
 
 		listener, err = tls.Listen("tcp", hostPort, tlsConfig)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to listen on %s: %w", hostPort, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
 		}
 	} else {
 		listener, err = net.Listen("tcp", hostPort)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to listen on %s: %w", hostPort, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
 		}
 	}
 
 	resultCh := make(chan CallbackResult, 1)
+	doneCh := make(chan struct{})
+	serveDone := make(chan struct{})
+	publish := func(result CallbackResult) {
+		select {
+		case resultCh <- result:
+		default:
+		}
+	}
 
 	mux := http.NewServeMux()
 	server := &http.Server{
@@ -152,45 +179,51 @@ func StartHTTPSCallbackServerWithAddr(ctx context.Context, redirectURLStr string
 			w.WriteHeader(http.StatusBadRequest)
 			escapedErr := html.EscapeString(authError)
 			fmt.Fprintf(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #ff6b6b; padding: 40px; text-align: center;"><h2>Authentication Failed</h2><p>%s</p><p>You may close this tab.</p></body></html>`, escapedErr)
-			resultCh <- CallbackResult{
+			publish(CallbackResult{
 				Error: fmt.Errorf("spotify auth error: %s", authError),
 				State: state,
-			}
+			})
 			return
 		}
 
 		if code == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #ff6b6b; padding: 40px; text-align: center;"><h2>Invalid Request</h2><p>Missing authorization code.</p></body></html>`)
-			resultCh <- CallbackResult{
+			publish(CallbackResult{
 				Error: errors.New("missing authorization code in callback"),
 				State: state,
-			}
+			})
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #00e5ff; padding: 40px; text-align: center;"><h2>Authentication Successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>`)
 
-		resultCh <- CallbackResult{
+		publish(CallbackResult{
 			Code:  code,
 			State: state,
-		}
+		})
 	})
 
 	go func() {
 		_ = server.Serve(listener)
+		close(serveDone)
 	}()
 
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-		_ = listener.Close()
+		select {
+		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = server.Shutdown(shutdownCtx)
+			cancel()
+			_ = listener.Close()
+		case <-serveDone:
+		}
+		<-serveDone
+		close(doneCh)
 	}()
 
-	return resultCh, listener.Addr().String(), nil
+	return &CallbackServer{Results: resultCh, Addr: listener.Addr().String(), Done: doneCh}, nil
 }
 
 func hasPort(host string) bool {

@@ -66,22 +66,23 @@ func TestHTTPSCallbackServerEphemeralPort(t *testing.T) {
 func TestHTTPSCallbackServerContextCancel(t *testing.T) {
 	ctx1, cancel1 := context.WithCancel(context.Background())
 
-	_, addr, err := StartHTTPSCallbackServerWithAddr(ctx1, "https://127.0.0.1:0/callback")
+	callback, err := StartCallbackServer(ctx1, "https://127.0.0.1:0/callback")
 	if err != nil {
 		t.Fatalf("failed to start first HTTPS server: %v", err)
 	}
 
-	// Cancel context to stop server
 	cancel1()
-
-	// Wait briefly for listener to be closed
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-callback.Done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("callback server did not terminate after cancellation")
+	}
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 
 	// Starting server on same allocated port should succeed now that port is released
-	_, err = StartHTTPSCallbackServer(ctx2, fmt.Sprintf("https://%s/callback", addr))
+	_, err = StartHTTPSCallbackServer(ctx2, fmt.Sprintf("https://%s/callback", callback.Addr))
 	if err != nil {
 		t.Fatalf("failed to start second HTTPS server on same port after cancel: %v", err)
 	}

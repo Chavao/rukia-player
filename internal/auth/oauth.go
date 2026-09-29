@@ -126,12 +126,15 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 	}
 
 	loginCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	callbackCh, err := StartHTTPSCallbackServer(loginCtx, o.appCfg.RedirectURI)
+	callback, err := StartCallbackServer(loginCtx, o.appCfg.RedirectURI)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to start HTTPS callback server: %w", err)
 	}
+	defer func() {
+		cancel()
+		<-callback.Done
+	}()
 
 	authURL := o.GetAuthURL(state)
 
@@ -140,7 +143,7 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 	_ = OpenBrowser(authURL)
 
 	select {
-	case res := <-callbackCh:
+	case res := <-callback.Results:
 		if res.Error != nil {
 			return nil, fmt.Errorf("login failed: %w", res.Error)
 		}
