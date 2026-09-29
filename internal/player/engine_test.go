@@ -84,6 +84,9 @@ func TestEngineErrorsChannel(t *testing.T) {
 	if engine.Errors() == nil {
 		t.Fatal("expected non-nil errors channel")
 	}
+	if engine.Done() != nil || engine.Running() {
+		t.Fatal("new engine must not report a running daemon")
+	}
 }
 
 func TestFileStateStore(t *testing.T) {

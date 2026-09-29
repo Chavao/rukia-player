@@ -165,6 +165,7 @@ type Engine struct {
 	app        *daemon.App
 	cancel     context.CancelFunc
 	errCh      chan error
+	doneCh     chan struct{}
 	mu         sync.Mutex
 	running    bool
 	volume     int // 0 to 100
@@ -238,13 +239,18 @@ func (e *Engine) Start(parentCtx context.Context, username, accessToken string) 
 	ctx, cancel := context.WithCancel(parentCtx)
 	e.cancel = cancel
 	e.app = app
+	e.doneCh = make(chan struct{})
+	e.errCh = make(chan error, 1)
 	e.running = true
+	doneCh := e.doneCh
+	errCh := e.errCh
 
 	go func() {
+		defer close(doneCh)
 		err := app.Run(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			select {
-			case e.errCh <- err:
+			case errCh <- err:
 			default:
 			}
 		}
@@ -276,7 +282,23 @@ func (e *Engine) Volume() int {
 
 // Errors returns a channel to monitor background engine failures.
 func (e *Engine) Errors() <-chan error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.errCh
+}
+
+// Done closes when the current daemon run exits.
+func (e *Engine) Done() <-chan struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.doneCh
+}
+
+// Running reports whether the daemon was started and has not been closed.
+func (e *Engine) Running() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.running
 }
 
 // Close gracefully stops the player daemon and releases audio resources.

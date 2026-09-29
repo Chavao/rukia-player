@@ -139,19 +139,28 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) waitForPlayerErrorCmd() tea.Cmd {
-	if m.playerEngine == nil {
+	if m.playerEngine == nil || !m.playerEngine.Running() {
 		return nil
 	}
 	errCh := m.playerEngine.Errors()
+	doneCh := m.playerEngine.Done()
 	return func() tea.Msg {
-		if errCh == nil {
-			return nil
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return playerErrorMsg{err: err}
+			}
+		case <-doneCh:
+			// The daemon may have sent its terminal error before closing Done.
+			select {
+			case err := <-errCh:
+				if err != nil {
+					return playerErrorMsg{err: err}
+				}
+			default:
+			}
 		}
-		err, ok := <-errCh
-		if !ok || err == nil {
-			return nil
-		}
-		return playerErrorMsg{err: err}
+		return nil
 	}
 }
 
@@ -224,7 +233,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case playerErrorMsg:
-		cmds = append(cmds, m.waitForPlayerErrorCmd(), m.showError(fmt.Errorf("audio player error: %w", msg.err), 5*time.Second))
+		cmds = append(cmds, m.showError(fmt.Errorf("audio player error: %w", msg.err), 5*time.Second))
 
 	case playbackChangedMsg:
 		m.playbackPending = false

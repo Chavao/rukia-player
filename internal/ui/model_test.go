@@ -220,14 +220,9 @@ func TestWaitForPlayerErrorCmd(t *testing.T) {
 	model := NewModel(nil, eng, nil, nil, "dev-1")
 
 	cmd := model.waitForPlayerErrorCmd()
-	if cmd == nil {
-		t.Fatal("expected non-nil tea.Cmd for waitForPlayerErrorCmd")
+	if cmd != nil {
+		t.Fatal("stopped engine must not schedule an error waiter")
 	}
-
-	// Dispatch an error into the engine's error channel via background
-	go func() {
-		eng.Errors()
-	}()
 
 	// Simulate handling playerErrorMsg
 	m, cmd := model.Update(playerErrorMsg{err: assertErr("pulseaudio died")})
@@ -237,7 +232,7 @@ func TestWaitForPlayerErrorCmd(t *testing.T) {
 		t.Errorf("expected model.err to contain pulseaudio died, got: %v", model.err)
 	}
 	if cmd == nil {
-		t.Fatal("expected cmd to be scheduled")
+		t.Fatal("expected an error clear timer")
 	}
 }
 
