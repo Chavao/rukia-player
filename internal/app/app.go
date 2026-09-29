@@ -146,13 +146,8 @@ func Run(ctx context.Context, args []string) error {
 	targetDeviceID := discoverDevice(deviceCtx, spotifyClient, playerEngine.DeviceName(), 8, 500*time.Millisecond)
 
 	// 9. Start initial playback
-	if targetDeviceID != "" {
-		_ = spotifyClient.TransferPlayback(ctx, targetDeviceID, true)
-		time.Sleep(250 * time.Millisecond)
-		_ = spotifyClient.PlayPlaylist(ctx, targetDeviceID, playlist.URI, 0)
-	} else {
-		// Attempt playback without explicit device
-		_ = spotifyClient.PlayPlaylist(ctx, "", playlist.URI, 0)
+	if err := startInitialPlayback(ctx, spotifyClient, targetDeviceID, playlist.URI); err != nil {
+		return err
 	}
 
 	// 10. Start Bubble Tea TUI
@@ -168,6 +163,29 @@ func Run(ctx context.Context, args []string) error {
 
 type deviceLister interface {
 	GetDevices(context.Context) ([]spotify.Device, error)
+}
+
+type playbackStarter interface {
+	TransferPlayback(context.Context, string, bool) error
+	PlayPlaylist(context.Context, string, string, int) error
+}
+
+func startInitialPlayback(ctx context.Context, client playbackStarter, deviceID, playlistURI string) error {
+	var transferErr error
+	if deviceID != "" {
+		transferErr = client.TransferPlayback(ctx, deviceID, true)
+	}
+	playErr := client.PlayPlaylist(ctx, deviceID, playlistURI, 0)
+	if playErr != nil {
+		if transferErr != nil {
+			return fmt.Errorf("failed to start playlist: %w", errors.Join(
+				fmt.Errorf("transfer playback: %w", transferErr),
+				fmt.Errorf("play playlist: %w", playErr),
+			))
+		}
+		return fmt.Errorf("failed to start playlist: %w", playErr)
+	}
+	return nil
 }
 
 func discoverDevice(ctx context.Context, client deviceLister, name string, maxAttempts int, interval time.Duration) string {

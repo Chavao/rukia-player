@@ -13,6 +13,55 @@ import (
 
 type deviceListerFunc func(context.Context) ([]spotify.Device, error)
 
+type playbackStarterStub struct {
+	transferErr error
+	playErr     error
+	calls       []string
+}
+
+func (s *playbackStarterStub) TransferPlayback(_ context.Context, device string, play bool) error {
+	s.calls = append(s.calls, "transfer:"+device)
+	return s.transferErr
+}
+
+func (s *playbackStarterStub) PlayPlaylist(_ context.Context, device, _ string, _ int) error {
+	s.calls = append(s.calls, "play:"+device)
+	return s.playErr
+}
+
+func TestStartInitialPlayback(t *testing.T) {
+	transferErr := errors.New("transfer failed")
+	playErr := errors.New("play failed")
+	for _, tc := range []struct {
+		name                 string
+		device               string
+		transferErr, playErr error
+		wantCalls            string
+		wantErr              error
+	}{
+		{"transfer and play", "device", nil, nil, "transfer:device,play:device", nil},
+		{"transfer fails but play succeeds", "device", transferErr, nil, "transfer:device,play:device", nil},
+		{"play fails", "device", nil, playErr, "transfer:device,play:device", playErr},
+		{"both fail", "device", transferErr, playErr, "transfer:device,play:device", playErr},
+		{"no device succeeds", "", nil, nil, "play:", nil},
+		{"no device fails", "", nil, playErr, "play:", playErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &playbackStarterStub{transferErr: tc.transferErr, playErr: tc.playErr}
+			err := startInitialPlayback(context.Background(), stub, tc.device, "spotify:playlist:test")
+			if strings.Join(stub.calls, ",") != tc.wantCalls {
+				t.Fatalf("calls=%v, want %s", stub.calls, tc.wantCalls)
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error=%v, want %v", err, tc.wantErr)
+			}
+			if tc.transferErr != nil && tc.playErr != nil && !errors.Is(err, tc.transferErr) {
+				t.Fatalf("combined error omits transfer failure: %v", err)
+			}
+		})
+	}
+}
+
 func (f deviceListerFunc) GetDevices(ctx context.Context) ([]spotify.Device, error) {
 	return f(ctx)
 }
@@ -78,6 +127,7 @@ func TestDiscoverDeviceKeepsActiveFallback(t *testing.T) {
 		t.Fatalf("expected active fallback, got %q", got)
 	}
 }
+
 func TestDiscoverDeviceUsesLatestSuccessfulFallback(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
