@@ -454,6 +454,23 @@ func TestVolumePersistenceFailureAndExit(t *testing.T) {
 	}
 }
 
+func TestStaleVolumePersistenceDoesNotOverwriteLatestValue(t *testing.T) {
+	settings := &volumeSettingsStub{volume: 0}
+	model := NewModel(nil, nil, nil, nil, "", settings)
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	_, oldCmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load()})
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	model.Update(oldCmd())
+	if settings.calls != 0 {
+		t.Fatal("stale persistence wrote an older volume")
+	}
+	_, latestCmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load()})
+	model.Update(latestCmd())
+	if settings.calls != 1 || settings.volume != 10 {
+		t.Fatalf("persisted %d after %d calls, want 10 after one call", settings.volume, settings.calls)
+	}
+}
+
 func TestModelTrackIndexLookup(t *testing.T) {
 	tracks := []spotify.Track{
 		{ID: "track-a", Name: "Alpha", DurationMs: 120000},
