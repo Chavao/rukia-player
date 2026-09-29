@@ -18,13 +18,22 @@ const spotifyAPIBase = "https://api.spotify.com/v1"
 // Client is the Spotify Web API HTTP client wrapper.
 type Client struct {
 	httpClient *http.Client
+	apiBase    string
 }
 
 // NewClient returns a new Client with the provided authenticated HTTP client.
 func NewClient(httpClient *http.Client) *Client {
 	return &Client{
 		httpClient: httpClient,
+		apiBase:    spotifyAPIBase,
 	}
+}
+
+func (c *Client) endpointBase() string {
+	if c.apiBase != "" {
+		return c.apiBase
+	}
+	return spotifyAPIBase
 }
 
 // UserProfile represents a Spotify user profile.
@@ -76,7 +85,7 @@ type PlaybackState struct {
 
 // GetCurrentUser fetches the logged-in user profile.
 func (c *Client) GetCurrentUser(ctx context.Context) (*UserProfile, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spotifyAPIBase+"/me", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpointBase()+"/me", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +110,7 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*UserProfile, error) {
 
 // GetPlaylist fetches the complete playlist, including paginated tracks.
 func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist, error) {
-	endpoint := fmt.Sprintf("%s/playlists/%s?fields=id,name,description,uri,tracks.total", spotifyAPIBase, playlistID)
+	endpoint := fmt.Sprintf("%s/playlists/%s", c.endpointBase(), playlistID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -122,7 +131,10 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		URI         string `json:"uri"`
-		Tracks      struct {
+		Items       struct {
+			Total int `json:"total"`
+		} `json:"items"`
+		Tracks struct {
 			Total int `json:"total"`
 		} `json:"tracks"`
 	}
@@ -131,13 +143,31 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 		return nil, fmt.Errorf("failed to decode playlist metadata: %w", err)
 	}
 
+	totalTracks := rawMeta.Items.Total
+	if totalTracks == 0 {
+		totalTracks = rawMeta.Tracks.Total
+	}
+
 	playlist := &Playlist{
 		ID:          rawMeta.ID,
 		Name:        rawMeta.Name,
 		Description: rawMeta.Description,
 		URI:         rawMeta.URI,
-		TotalTracks: rawMeta.Tracks.Total,
-		Tracks:      make([]Track, 0, rawMeta.Tracks.Total),
+		TotalTracks: totalTracks,
+		Tracks:      make([]Track, 0, totalTracks),
+	}
+
+	type rawTrack struct {
+		ID         string `json:"id"`
+		URI        string `json:"uri"`
+		Name       string `json:"name"`
+		DurationMs int    `json:"duration_ms"`
+		Artists    []struct {
+			Name string `json:"name"`
+		} `json:"artists"`
+		Album struct {
+			Name string `json:"name"`
+		} `json:"album"`
 	}
 
 	offset := 0
@@ -145,8 +175,9 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 	var totalDurationMs int
 
 	for {
-		tracksEndpoint := fmt.Sprintf("%s/playlists/%s/tracks?limit=%d&offset=%d", spotifyAPIBase, playlistID, limit, offset)
-		tReq, err := http.NewRequestWithContext(ctx, http.MethodGet, tracksEndpoint, nil)
+		// Use modern /items endpoint, with fallback to legacy /tracks if needed
+		itemsEndpoint := fmt.Sprintf("%s/playlists/%s/items?limit=%d&offset=%d", c.endpointBase(), playlistID, limit, offset)
+		tReq, err := http.NewRequestWithContext(ctx, http.MethodGet, itemsEndpoint, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -156,6 +187,20 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 			return nil, fmt.Errorf("failed to fetch tracks page: %w", err)
 		}
 
+		if tResp.StatusCode == http.StatusNotFound || tResp.StatusCode == http.StatusForbidden {
+			tResp.Body.Close()
+			// Fallback to legacy /tracks endpoint
+			legacyEndpoint := fmt.Sprintf("%s/playlists/%s/tracks?limit=%d&offset=%d", c.endpointBase(), playlistID, limit, offset)
+			tReqLegacy, lErr := http.NewRequestWithContext(ctx, http.MethodGet, legacyEndpoint, nil)
+			if lErr != nil {
+				return nil, lErr
+			}
+			tResp, err = c.httpClient.Do(tReqLegacy)
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch legacy tracks page: %w", err)
+			}
+		}
+
 		if err := checkError(tResp); err != nil {
 			tResp.Body.Close()
 			return nil, err
@@ -163,18 +208,8 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 
 		var page struct {
 			Items []struct {
-				Track *struct {
-					ID         string `json:"id"`
-					URI        string `json:"uri"`
-					Name       string `json:"name"`
-					DurationMs int    `json:"duration_ms"`
-					Artists    []struct {
-						Name string `json:"name"`
-					} `json:"artists"`
-					Album struct {
-						Name string `json:"name"`
-					} `json:"album"`
-				} `json:"track"`
+				Item  *rawTrack `json:"item"`
+				Track *rawTrack `json:"track"`
 			} `json:"items"`
 			Next *string `json:"next"`
 		}
@@ -186,22 +221,26 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 		tResp.Body.Close()
 
 		for _, item := range page.Items {
-			if item.Track == nil || item.Track.ID == "" {
+			trackObj := item.Item
+			if trackObj == nil {
+				trackObj = item.Track
+			}
+			if trackObj == nil || trackObj.ID == "" {
 				continue
 			}
 
-			artistNames := make([]string, len(item.Track.Artists))
-			for i, a := range item.Track.Artists {
+			artistNames := make([]string, len(trackObj.Artists))
+			for i, a := range trackObj.Artists {
 				artistNames[i] = a.Name
 			}
 
 			t := Track{
-				ID:         item.Track.ID,
-				URI:        item.Track.URI,
-				Name:       item.Track.Name,
+				ID:         trackObj.ID,
+				URI:        trackObj.URI,
+				Name:       trackObj.Name,
 				Artist:     strings.Join(artistNames, ", "),
-				Album:      item.Track.Album.Name,
-				DurationMs: item.Track.DurationMs,
+				Album:      trackObj.Album.Name,
+				DurationMs: trackObj.DurationMs,
 			}
 			totalDurationMs += t.DurationMs
 			playlist.Tracks = append(playlist.Tracks, t)
@@ -220,7 +259,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 
 // GetDevices returns all currently connected Spotify playback devices.
 func (c *Client) GetDevices(ctx context.Context) ([]Device, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spotifyAPIBase+"/me/player/devices", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpointBase()+"/me/player/devices", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +292,7 @@ func (c *Client) TransferPlayback(ctx context.Context, deviceID string, play boo
 	}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, spotifyAPIBase+"/me/player", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.endpointBase()+"/me/player", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -270,7 +309,7 @@ func (c *Client) TransferPlayback(ctx context.Context, deviceID string, play boo
 
 // PlayPlaylist starts playing a playlist context, optionally at a specific track offset.
 func (c *Client) PlayPlaylist(ctx context.Context, deviceID string, playlistURI string, trackOffset int) error {
-	endpoint := spotifyAPIBase + "/me/player/play"
+	endpoint := c.endpointBase() + "/me/player/play"
 	if deviceID != "" {
 		endpoint += "?device_id=" + url.QueryEscape(deviceID)
 	}
@@ -300,7 +339,7 @@ func (c *Client) PlayPlaylist(ctx context.Context, deviceID string, playlistURI 
 
 // Resume resumes playback on the specified or active device.
 func (c *Client) Resume(ctx context.Context, deviceID string) error {
-	endpoint := spotifyAPIBase + "/me/player/play"
+	endpoint := c.endpointBase() + "/me/player/play"
 	if deviceID != "" {
 		endpoint += "?device_id=" + url.QueryEscape(deviceID)
 	}
@@ -321,7 +360,7 @@ func (c *Client) Resume(ctx context.Context, deviceID string) error {
 
 // Pause pauses playback.
 func (c *Client) Pause(ctx context.Context, deviceID string) error {
-	endpoint := spotifyAPIBase + "/me/player/pause"
+	endpoint := c.endpointBase() + "/me/player/pause"
 	if deviceID != "" {
 		endpoint += "?device_id=" + url.QueryEscape(deviceID)
 	}
@@ -348,7 +387,7 @@ func (c *Client) SetVolume(ctx context.Context, deviceID string, volumePercent i
 		volumePercent = 100
 	}
 
-	endpoint := fmt.Sprintf("%s/me/player/volume?volume_percent=%d", spotifyAPIBase, volumePercent)
+	endpoint := fmt.Sprintf("%s/me/player/volume?volume_percent=%d", c.endpointBase(), volumePercent)
 	if deviceID != "" {
 		endpoint += "&device_id=" + url.QueryEscape(deviceID)
 	}
@@ -369,7 +408,7 @@ func (c *Client) SetVolume(ctx context.Context, deviceID string, volumePercent i
 
 // SetShuffle toggles shuffle state.
 func (c *Client) SetShuffle(ctx context.Context, deviceID string, state bool) error {
-	endpoint := fmt.Sprintf("%s/me/player/shuffle?state=%t", spotifyAPIBase, state)
+	endpoint := fmt.Sprintf("%s/me/player/shuffle?state=%t", c.endpointBase(), state)
 	if deviceID != "" {
 		endpoint += "&device_id=" + url.QueryEscape(deviceID)
 	}
@@ -390,7 +429,7 @@ func (c *Client) SetShuffle(ctx context.Context, deviceID string, state bool) er
 
 // SetRepeat sets repeat mode: "off", "context", or "track".
 func (c *Client) SetRepeat(ctx context.Context, deviceID string, state string) error {
-	endpoint := fmt.Sprintf("%s/me/player/repeat?state=%s", spotifyAPIBase, url.QueryEscape(state))
+	endpoint := fmt.Sprintf("%s/me/player/repeat?state=%s", c.endpointBase(), url.QueryEscape(state))
 	if deviceID != "" {
 		endpoint += "&device_id=" + url.QueryEscape(deviceID)
 	}
@@ -411,7 +450,7 @@ func (c *Client) SetRepeat(ctx context.Context, deviceID string, state string) e
 
 // GetPlaybackState returns the active playback state.
 func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spotifyAPIBase+"/me/player", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpointBase()+"/me/player", nil)
 	if err != nil {
 		return nil, err
 	}

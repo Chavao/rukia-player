@@ -1,6 +1,7 @@
 package spotify
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,6 +41,62 @@ func TestClientGetCurrentUser(t *testing.T) {
 	}
 
 	_ = c
+}
+
+func TestGetPlaylistItemsEndpoint(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/playlists/6UUCMxk575eDTwSWa0qQhB" {
+			w.Write([]byte(`{
+				"id": "6UUCMxk575eDTwSWa0qQhB",
+				"name": "Focus",
+				"uri": "spotify:playlist:6UUCMxk575eDTwSWa0qQhB",
+				"items": {"total": 1}
+			}`))
+			return
+		}
+		if r.URL.Path == "/playlists/6UUCMxk575eDTwSWa0qQhB/items" {
+			w.Write([]byte(`{
+				"items": [{
+					"item": {
+						"id": "trk1",
+						"uri": "spotify:track:trk1",
+						"name": "528 Hz Staying Focused",
+						"duration_ms": 89230,
+						"artists": [{"name": "Spiritual Frequencies"}],
+						"album": {"name": "528 Hz Positive Transformation"}
+					}
+				}],
+				"next": null
+			}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	c := &Client{
+		httpClient: ts.Client(),
+		apiBase:    ts.URL,
+	}
+
+	pl, err := c.GetPlaylist(context.Background(), "6UUCMxk575eDTwSWa0qQhB")
+	if err != nil {
+		t.Fatalf("GetPlaylist failed: %v", err)
+	}
+
+	if pl.Name != "Focus" {
+		t.Errorf("expected playlist name 'Focus', got %s", pl.Name)
+	}
+	if len(pl.Tracks) != 1 {
+		t.Fatalf("expected 1 track, got %d", len(pl.Tracks))
+	}
+	if pl.Tracks[0].Name != "528 Hz Staying Focused" {
+		t.Errorf("expected track name '528 Hz Staying Focused', got %s", pl.Tracks[0].Name)
+	}
+	if pl.Tracks[0].Artist != "Spiritual Frequencies" {
+		t.Errorf("expected artist 'Spiritual Frequencies', got %s", pl.Tracks[0].Artist)
+	}
 }
 
 func TestTrackAndPlaylistStructures(t *testing.T) {
