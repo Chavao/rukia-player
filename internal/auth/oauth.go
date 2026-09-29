@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -91,12 +92,15 @@ func (o *OAuthFlow) Client(ctx context.Context, token *oauth2.Token) (*http.Clie
 }
 
 type persistingTokenSource struct {
+	mu      sync.Mutex
 	src     oauth2.TokenSource
 	cfg     *Config
 	lastTok *oauth2.Token
 }
 
 func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	tok, err := p.src.Token()
 	if err != nil {
 		return nil, err
@@ -104,8 +108,7 @@ func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 
 	if p.lastTok == nil || tok.AccessToken != p.lastTok.AccessToken {
 		p.lastTok = tok
-		p.cfg.Token = tok
-		_ = p.cfg.Save()
+		_ = p.cfg.SetToken(tok)
 	}
 
 	return tok, nil
@@ -150,8 +153,7 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 			return nil, err
 		}
 
-		o.appCfg.Token = token
-		if err := o.appCfg.Save(); err != nil {
+		if err := o.appCfg.SetToken(token); err != nil {
 			return nil, fmt.Errorf("failed to save token to config: %w", err)
 		}
 

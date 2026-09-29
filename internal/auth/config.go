@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"golang.org/x/oauth2"
 )
@@ -19,6 +20,7 @@ const (
 
 // Config represents persistent application configuration, credentials, and OAuth tokens.
 type Config struct {
+	mu           sync.Mutex
 	ClientID     string        `json:"client_id"`
 	ClientSecret string        `json:"client_secret"`
 	RedirectURI  string        `json:"redirect_uri"`
@@ -124,6 +126,50 @@ func LoadConfig() (*Config, error) {
 
 // Save writes the configuration to disk with secure 0600 permissions.
 func (c *Config) Save() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.saveLocked()
+}
+
+// CurrentVolume returns the saved player volume.
+func (c *Config) CurrentVolume() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Volume
+}
+
+// SetVolume persists a volume change together with the latest token.
+func (c *Config) SetVolume(volume int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Volume = volume
+	return c.saveLocked()
+}
+
+// SetToken persists a refreshed OAuth token together with other config changes.
+func (c *Config) SetToken(token *oauth2.Token) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Token = token
+	return c.saveLocked()
+}
+
+// CurrentToken returns the latest OAuth token.
+func (c *Config) CurrentToken() *oauth2.Token {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Token
+}
+
+// SetLastPlaylist persists the most recently played playlist.
+func (c *Config) SetLastPlaylist(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.LastPlaylist = id
+	return c.saveLocked()
+}
+
+func (c *Config) saveLocked() error {
 	path, err := GetConfigPath()
 	if err != nil {
 		return err
@@ -134,12 +180,20 @@ func (c *Config) Save() error {
 		return fmt.Errorf("failed to serialize config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config file %s: %w", path, err)
+	f, err := os.CreateTemp(filepath.Dir(path), ".config-*")
+	if err != nil {
+		return fmt.Errorf("failed to create config file: %w", err)
 	}
-
-	if err := os.Chmod(path, 0600); err != nil {
-		return fmt.Errorf("failed to set 0600 permissions on %s: %w", path, err)
+	defer os.Remove(f.Name())
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close config file: %w", err)
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return fmt.Errorf("failed to replace config file %s: %w", path, err)
 	}
 
 	return nil

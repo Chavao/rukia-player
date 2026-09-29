@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Chavao/rukia-player/internal/auth"
 	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
 	"github.com/charmbracelet/bubbles/key"
@@ -46,15 +45,21 @@ type SpotifyController interface {
 	SetRepeat(ctx context.Context, deviceID string, state string) error
 }
 
+// VolumeSettings provides persisted volume without exposing configuration to the UI.
+type VolumeSettings interface {
+	CurrentVolume() int
+	SetVolume(int) error
+}
+
 // Model is the main Bubble Tea application model.
 type Model struct {
-	spotifyClient SpotifyController
-	playerEngine  *player.Engine
-	user          *spotify.UserProfile
-	playlist      *spotify.Playlist
-	deviceID      string
-	appCfg        *auth.Config
-	trackIndex    map[string]int
+	spotifyClient  SpotifyController
+	playerEngine   *player.Engine
+	user           *spotify.UserProfile
+	playlist       *spotify.Playlist
+	deviceID       string
+	volumeSettings VolumeSettings
+	trackIndex     map[string]int
 
 	cursor     int
 	playingIdx int
@@ -80,13 +85,13 @@ func NewModel(
 	user *spotify.UserProfile,
 	playlist *spotify.Playlist,
 	deviceID string,
-	appCfg ...*auth.Config,
+	settings ...VolumeSettings,
 ) *Model {
 	vol := 100
-	var cfg *auth.Config
-	if len(appCfg) > 0 && appCfg[0] != nil {
-		cfg = appCfg[0]
-		vol = cfg.Volume
+	var volumeSettings VolumeSettings
+	if len(settings) > 0 && settings[0] != nil {
+		volumeSettings = settings[0]
+		vol = volumeSettings.CurrentVolume()
 	}
 
 	idxMap := make(map[string]int)
@@ -97,23 +102,23 @@ func NewModel(
 	}
 
 	return &Model{
-		spotifyClient: spotifyClient,
-		playerEngine:  playerEngine,
-		user:          user,
-		playlist:      playlist,
-		deviceID:      deviceID,
-		appCfg:        cfg,
-		trackIndex:    idxMap,
-		cursor:        0,
-		playingIdx:    0,
-		isPlaying:     true,
-		progressMs:    0,
-		volume:        vol,
-		repeatMode:    "off",
-		exitDialog:    NewExitDialog(),
-		keys:          DefaultKeyMap(),
-		width:         80,
-		height:        24,
+		spotifyClient:  spotifyClient,
+		playerEngine:   playerEngine,
+		user:           user,
+		playlist:       playlist,
+		deviceID:       deviceID,
+		volumeSettings: volumeSettings,
+		trackIndex:     idxMap,
+		cursor:         0,
+		playingIdx:     0,
+		isPlaying:      true,
+		progressMs:     0,
+		volume:         vol,
+		repeatMode:     "off",
+		exitDialog:     NewExitDialog(),
+		keys:           DefaultKeyMap(),
+		width:          80,
+		height:         24,
 	}
 }
 
@@ -244,9 +249,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.exitDialog.Next()
 			case key.Matches(msg, m.keys.Enter):
 				if m.exitDialog.Selected == ExitOptionYes {
-					if m.appCfg != nil {
-						m.appCfg.Volume = m.volume
-						_ = m.appCfg.Save()
+					if m.volumeSettings != nil {
+						_ = m.volumeSettings.SetVolume(m.volume)
 					}
 					if m.playerEngine != nil {
 						_ = m.playerEngine.Close()
@@ -296,9 +300,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume > 100 {
 					m.volume = 100
 				}
-				if m.appCfg != nil {
-					m.appCfg.Volume = m.volume
-					_ = m.appCfg.Save()
+				if m.volumeSettings != nil {
+					_ = m.volumeSettings.SetVolume(m.volume)
 				}
 				cmds = append(cmds, m.setVolumeCmd(m.volume))
 			}
@@ -309,9 +312,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume < 0 {
 					m.volume = 0
 				}
-				if m.appCfg != nil {
-					m.appCfg.Volume = m.volume
-					_ = m.appCfg.Save()
+				if m.volumeSettings != nil {
+					_ = m.volumeSettings.SetVolume(m.volume)
 				}
 				cmds = append(cmds, m.setVolumeCmd(m.volume))
 			}

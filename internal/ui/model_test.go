@@ -236,8 +236,8 @@ func TestModelVolumePersistence(t *testing.T) {
 	if model.volume != 5 {
 		t.Errorf("expected volume 5 after VolumeUp, got %d", model.volume)
 	}
-	if cfg.Volume != 5 {
-		t.Errorf("expected cfg.Volume to be updated to 5, got %d", cfg.Volume)
+	if cfg.CurrentVolume() != 5 {
+		t.Errorf("expected cfg.Volume to be updated to 5, got %d", cfg.CurrentVolume())
 	}
 }
 

@@ -90,15 +90,13 @@ func Run(ctx context.Context, args []string) error {
 	oauthFlow := auth.NewOAuthFlow(cfg)
 
 	if cfg.Token == nil || !cfg.Token.Valid() {
-		token, err := oauthFlow.RunInteractiveLogin(ctx)
-		if err != nil {
+		if _, err := oauthFlow.RunInteractiveLogin(ctx); err != nil {
 			return fmt.Errorf("spotify login failed: %w", err)
 		}
-		cfg.Token = token
 	}
 
 	// 5. Initialize authenticated Spotify client
-	httpClient, _ := oauthFlow.Client(ctx, cfg.Token)
+	httpClient, _ := oauthFlow.Client(ctx, cfg.CurrentToken())
 	spotifyClient := spotify.NewClient(httpClient)
 
 	// Fetch current user
@@ -108,12 +106,10 @@ func Run(ctx context.Context, args []string) error {
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
 			// If token was rejected with 401, re-authenticate once
 			fmt.Printf("Session expired (401), re-authenticating: %v\n", err)
-			token, err := oauthFlow.RunInteractiveLogin(ctx)
-			if err != nil {
+			if _, err := oauthFlow.RunInteractiveLogin(ctx); err != nil {
 				return fmt.Errorf("authentication failed: %w", err)
 			}
-			cfg.Token = token
-			httpClient, _ = oauthFlow.Client(ctx, cfg.Token)
+			httpClient, _ = oauthFlow.Client(ctx, cfg.CurrentToken())
 			spotifyClient = spotify.NewClient(httpClient)
 			user, err = spotifyClient.GetCurrentUser(ctx)
 			if err != nil {
@@ -126,10 +122,10 @@ func Run(ctx context.Context, args []string) error {
 
 	// 6. Start PulseAudio audio sink
 	playerEngine := player.NewEngine("rukia")
-	if cfg.Volume >= 0 {
-		playerEngine.SetVolume(cfg.Volume)
+	if volume := cfg.CurrentVolume(); volume >= 0 {
+		playerEngine.SetVolume(volume)
 	}
-	if err := playerEngine.Start(ctx, user.ID, cfg.Token.AccessToken); err != nil {
+	if err := playerEngine.Start(ctx, user.ID, cfg.CurrentToken().AccessToken); err != nil {
 		fmt.Printf("Notice: PulseAudio audio sink initialization failed (%v)\n", err)
 	}
 	defer playerEngine.Close()
@@ -142,8 +138,7 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	// Persist last played playlist
-	cfg.LastPlaylist = playlistID
-	_ = cfg.Save()
+	_ = cfg.SetLastPlaylist(playlistID)
 
 	// 8. Find target device (rukia or active device)
 	var targetDeviceID string

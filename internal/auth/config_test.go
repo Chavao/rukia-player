@@ -3,6 +3,7 @@ package auth
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"golang.org/x/oauth2"
@@ -133,5 +134,32 @@ func TestConfigSaveEnforcesChmodExistingFile(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0600 {
 		t.Errorf("expected mode 0600 after Save on existing 0644 file, got %v", fi.Mode().Perm())
+	}
+}
+
+func TestConcurrentVolumeAndTokenPersistence(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := DefaultConfig()
+	var wg sync.WaitGroup
+	var volumeErr, tokenErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		volumeErr = cfg.SetVolume(35)
+	}()
+	go func() {
+		defer wg.Done()
+		tokenErr = cfg.SetToken(&oauth2.Token{AccessToken: "test-token"})
+	}()
+	wg.Wait()
+	if volumeErr != nil || tokenErr != nil {
+		t.Fatalf("persisting config: volume=%v token=%v", volumeErr, tokenErr)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Volume != 35 || loaded.Token == nil || loaded.Token.AccessToken != "test-token" {
+		t.Fatalf("concurrent updates were lost: volume=%d token=%v", loaded.Volume, loaded.Token)
 	}
 }
