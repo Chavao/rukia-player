@@ -90,19 +90,40 @@ func TestModelTick(t *testing.T) {
 
 func TestModelPlaybackChangedMsg(t *testing.T) {
 	model := NewModel(nil, nil, nil, nil, "dev-1")
-	model.isPlaying = false
-
-	m, _ := model.Update(playbackChangedMsg{playing: true, err: nil})
-	updated := m.(*Model)
-	if !updated.isPlaying {
-		t.Error("expected isPlaying to be true after successful playbackChangedMsg")
+	space := tea.KeyMsg{Type: tea.KeySpace}
+	model.Update(space)
+	if model.isPlaying || !model.playbackPending {
+		t.Fatal("first key must optimistically pause playback")
 	}
+	model.Update(playbackChangedMsg{playing: false})
+	if model.isPlaying || model.playbackPending || model.confirmedPlaying {
+		t.Fatal("successful pause must confirm the optimistic state")
+	}
+	model.Update(space)
+	if !model.isPlaying {
+		t.Fatal("second key must optimistically resume playback")
+	}
+	model.Update(playbackChangedMsg{playing: true, err: assertErr("failed")})
+	if model.isPlaying || model.playbackPending {
+		t.Fatal("failed resume must restore the confirmed state")
+	}
+}
 
-	// When error occurs, isPlaying shouldn't change
-	m, _ = model.Update(playbackChangedMsg{playing: false, err: assertErr("failed")})
-	updated = m.(*Model)
-	if !updated.isPlaying {
-		t.Error("expected isPlaying to remain true after failed playbackChangedMsg")
+func TestRapidPlaybackTogglesAreSerialized(t *testing.T) {
+	model := NewModel(nil, nil, nil, nil, "dev-1")
+	space := tea.KeyMsg{Type: tea.KeySpace}
+	model.Update(space)
+	model.Update(space)
+	if !model.isPlaying || !model.playbackPending {
+		t.Fatal("second toggle must update the visible state while first command is pending")
+	}
+	_, cmd := model.Update(playbackChangedMsg{playing: false})
+	if !model.playbackPending || !model.isPlaying || cmd == nil {
+		t.Fatal("successful pause must schedule the queued resume")
+	}
+	model.Update(playbackChangedMsg{playing: true})
+	if model.playbackPending || !model.confirmedPlaying || !model.isPlaying {
+		t.Fatal("queued resume must complete in order")
 	}
 }
 

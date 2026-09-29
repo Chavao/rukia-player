@@ -61,13 +61,15 @@ type Model struct {
 	volumeSettings VolumeSettings
 	trackIndex     map[string]int
 
-	cursor     int
-	playingIdx int
-	isPlaying  bool
-	progressMs int
-	volume     int
-	repeatMode string
-	shuffle    bool
+	cursor           int
+	playingIdx       int
+	isPlaying        bool
+	confirmedPlaying bool
+	playbackPending  bool
+	progressMs       int
+	volume           int
+	repeatMode       string
+	shuffle          bool
 
 	showExitModal bool
 	exitDialog    ExitDialog
@@ -102,23 +104,24 @@ func NewModel(
 	}
 
 	return &Model{
-		spotifyClient:  spotifyClient,
-		playerEngine:   playerEngine,
-		user:           user,
-		playlist:       playlist,
-		deviceID:       deviceID,
-		volumeSettings: volumeSettings,
-		trackIndex:     idxMap,
-		cursor:         0,
-		playingIdx:     0,
-		isPlaying:      true,
-		progressMs:     0,
-		volume:         vol,
-		repeatMode:     "off",
-		exitDialog:     NewExitDialog(),
-		keys:           DefaultKeyMap(),
-		width:          80,
-		height:         24,
+		spotifyClient:    spotifyClient,
+		playerEngine:     playerEngine,
+		user:             user,
+		playlist:         playlist,
+		deviceID:         deviceID,
+		volumeSettings:   volumeSettings,
+		trackIndex:       idxMap,
+		cursor:           0,
+		playingIdx:       0,
+		isPlaying:        true,
+		confirmedPlaying: true,
+		progressMs:       0,
+		volume:           vol,
+		repeatMode:       "off",
+		exitDialog:       NewExitDialog(),
+		keys:             DefaultKeyMap(),
+		width:            80,
+		height:           24,
 	}
 }
 
@@ -202,7 +205,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case playbackStateMsg:
 		if msg != nil {
-			m.isPlaying = msg.IsPlaying
+			if !m.playbackPending {
+				m.isPlaying = msg.IsPlaying
+				m.confirmedPlaying = msg.IsPlaying
+			}
 			m.progressMs = msg.ProgressMs
 			m.repeatMode = msg.RepeatState
 			m.shuffle = msg.ShuffleState
@@ -221,11 +227,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.waitForPlayerErrorCmd(), clearErrorCmd(5*time.Second))
 
 	case playbackChangedMsg:
-		if msg.err == nil {
-			m.isPlaying = msg.playing
-		} else {
+		m.playbackPending = false
+		if msg.err != nil {
 			m.err = fmt.Errorf("failed to toggle playback: %w", msg.err)
 			cmds = append(cmds, clearErrorCmd(3*time.Second))
+		} else {
+			m.confirmedPlaying = msg.playing
+		}
+		if m.isPlaying != m.confirmedPlaying {
+			if msg.err != nil && m.isPlaying == msg.playing {
+				m.isPlaying = m.confirmedPlaying
+			} else {
+				m.playbackPending = true
+				cmds = append(cmds, m.togglePlayPauseCmd(m.isPlaying))
+			}
 		}
 
 	case actionResultMsg:
@@ -282,7 +297,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter):
 			if m.cursor == m.playingIdx {
 				// Toggle Play/Pause
-				cmds = append(cmds, m.togglePlayPauseCmd(!m.isPlaying))
+				cmds = append(cmds, m.togglePlayback())
 			} else {
 				// Play selected track
 				m.playingIdx = m.cursor
@@ -292,7 +307,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Space):
-			cmds = append(cmds, m.togglePlayPauseCmd(!m.isPlaying))
+			cmds = append(cmds, m.togglePlayback())
 
 		case key.Matches(msg, m.keys.VolumeUp):
 			if m.volume < 100 {
@@ -333,6 +348,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) togglePlayback() tea.Cmd {
+	m.isPlaying = !m.isPlaying
+	if m.playbackPending {
+		return nil
+	}
+	m.playbackPending = true
+	return m.togglePlayPauseCmd(m.isPlaying)
 }
 
 func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
