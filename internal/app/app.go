@@ -141,35 +141,9 @@ func Run(ctx context.Context, args []string) error {
 	_ = cfg.SetLastPlaylist(playlistID)
 
 	// 8. Find target device (rukia or active device)
-	var targetDeviceID string
-	// Allow a moment for the connect receiver to register
-	for attempts := 0; attempts < 8; attempts++ {
-		devices, err := spotifyClient.GetDevices(ctx)
-		if err == nil {
-			for _, d := range devices {
-				if d.Name == playerEngine.DeviceName() {
-					targetDeviceID = d.ID
-					break
-				}
-			}
-			if targetDeviceID != "" {
-				break
-			}
-			// If rukia not found yet but active device exists, pick active
-			if attempts == 7 && len(devices) > 0 {
-				for _, d := range devices {
-					if d.IsActive {
-						targetDeviceID = d.ID
-						break
-					}
-				}
-				if targetDeviceID == "" {
-					targetDeviceID = devices[0].ID
-				}
-			}
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
+	deviceCtx, cancelDeviceDiscovery := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelDeviceDiscovery()
+	targetDeviceID := discoverDevice(deviceCtx, spotifyClient, playerEngine.DeviceName(), 8, 500*time.Millisecond)
 
 	// 9. Start initial playback
 	if targetDeviceID != "" {
@@ -190,4 +164,43 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+type deviceLister interface {
+	GetDevices(context.Context) ([]spotify.Device, error)
+}
+
+func discoverDevice(ctx context.Context, client deviceLister, name string, maxAttempts int, interval time.Duration) string {
+	var fallback string
+	for attempt := 0; attempt < maxAttempts && ctx.Err() == nil; attempt++ {
+		devices, err := client.GetDevices(ctx)
+		if err == nil {
+			for _, d := range devices {
+				if d.Name == name {
+					return d.ID
+				}
+			}
+			// Remember an active device in case the local receiver never appears.
+			if len(devices) > 0 {
+				fallback = devices[0].ID
+				for _, d := range devices {
+					if d.IsActive {
+						fallback = d.ID
+						break
+					}
+				}
+			}
+		}
+		if attempt == maxAttempts-1 {
+			break
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return fallback
+		}
+	}
+	return fallback
 }
