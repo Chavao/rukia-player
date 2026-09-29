@@ -120,7 +120,11 @@ func (s *FileStateStore) Save(state *librespot.AppState) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(s.cacheDir, "credentials.json"), data, 0600)
+	credPath := filepath.Join(s.cacheDir, "credentials.json")
+	if err := os.WriteFile(credPath, data, 0600); err != nil {
+		return err
+	}
+	return os.Chmod(credPath, 0600)
 }
 
 // MemoryStateStore satisfies state persistence for unit testing.

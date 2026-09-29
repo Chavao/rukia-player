@@ -3,7 +3,9 @@ package auth
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -100,4 +102,50 @@ func TestHTTPSCallbackServerContextCancel(t *testing.T) {
 		t.Fatalf("failed to start second HTTPS server on same port after cancel: %v", err)
 	}
 }
+
+func TestStartHTTPSCallbackServerSecurity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 1. External host should be rejected
+	_, err := StartHTTPSCallbackServer(ctx, "https://evil.com:8443/callback")
+	if err == nil || !strings.Contains(err.Error(), "insecure redirect URI host") {
+		t.Errorf("expected insecure host error, got %v", err)
+	}
+
+	// 2. Unsupported scheme should be rejected
+	_, err = StartHTTPSCallbackServer(ctx, "ftp://127.0.0.1:8443/callback")
+	if err == nil || !strings.Contains(err.Error(), "unsupported redirect URI scheme") {
+		t.Errorf("expected unsupported scheme error, got %v", err)
+	}
+
+	// 3. HTML escaping test
+	resCh, err := StartHTTPSCallbackServer(ctx, "https://127.0.0.1:18445/callback")
+	if err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Transport: tr, Timeout: 3 * time.Second}
+
+	resp, err := client.Get("https://127.0.0.1:18445/callback?error=%3Cscript%3Ealert(1)%3C/script%3E")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if strings.Contains(string(body), "<script>") {
+		t.Errorf("body contained unescaped HTML: %s", string(body))
+	}
+	if !strings.Contains(string(body), "&lt;script&gt;") {
+		t.Errorf("body missing escaped HTML: %s", string(body))
+	}
+
+	// Drain result channel
+	<-resCh
+}
+
 

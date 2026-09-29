@@ -107,3 +107,33 @@ func TestConfigZeroVolumeMute(t *testing.T) {
 	}
 }
 
+func TestConfigSaveEnforcesChmodExistingFile(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tempDir)
+
+	configDir := filepath.Join(tempDir, configDirName)
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	cfgPath := filepath.Join(configDir, configFileName)
+
+	// Pre-create file with permissive mode 0644
+	if err := os.WriteFile(cfgPath, []byte("{}"), 0644); err != nil {
+		t.Fatalf("failed to write insecure file: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("failed to save config: %v", err)
+	}
+
+	fi, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("failed to stat config file: %v", err)
+	}
+	if fi.Mode().Perm() != 0600 {
+		t.Errorf("expected mode 0600 after Save on existing 0644 file, got %v", fi.Mode().Perm())
+	}
+}
+
+

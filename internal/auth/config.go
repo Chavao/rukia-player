@@ -138,6 +138,10 @@ func (c *Config) Save() error {
 		return fmt.Errorf("failed to write config file %s: %w", path, err)
 	}
 
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("failed to set 0600 permissions on %s: %w", path, err)
+	}
+
 	return nil
 }
 

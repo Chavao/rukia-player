@@ -64,3 +64,12 @@ func TestPromptCredentialsIfMissingAlreadySet(t *testing.T) {
 	}
 }
 
+func TestSpotifyScopesLeastPrivilege(t *testing.T) {
+	for _, sc := range SpotifyScopes {
+		if sc == "user-library-read" {
+			t.Errorf("found unused scope 'user-library-read'")
+		}
+	}
+}
+
+

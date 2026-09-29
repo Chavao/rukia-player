@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"html"
 	"math/big"
 	"net"
 	"net/http"
@@ -78,6 +79,15 @@ func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-cha
 		return nil, fmt.Errorf("invalid redirect URI: %w", err)
 	}
 
+	hostname := u.Hostname()
+	if hostname != "127.0.0.1" && hostname != "localhost" && hostname != "::1" {
+		return nil, fmt.Errorf("insecure redirect URI host: %s; must be localhost or 127.0.0.1", hostname)
+	}
+
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, fmt.Errorf("unsupported redirect URI scheme: %s; must be http or https", u.Scheme)
+	}
+
 	hostPort := u.Host
 	if !hasPort(hostPort) {
 		if u.Scheme == "https" {
@@ -87,18 +97,26 @@ func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-cha
 		}
 	}
 
-	cert, err := GenerateSelfSignedCert()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate TLS cert: %w", err)
-	}
+	var listener net.Listener
+	if u.Scheme == "https" {
+		cert, err := GenerateSelfSignedCert()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate TLS cert: %w", err)
+		}
 
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
 
-	listener, err := tls.Listen("tcp", hostPort, tlsConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
+		listener, err = tls.Listen("tcp", hostPort, tlsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
+		}
+	} else {
+		listener, err = net.Listen("tcp", hostPort)
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
+		}
 	}
 
 	resultCh := make(chan CallbackResult, 1)
@@ -125,7 +143,8 @@ func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-cha
 
 		if authError != "" {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #ff6b6b; padding: 40px; text-align: center;"><h2>Authentication Failed</h2><p>%s</p><p>You may close this tab.</p></body></html>`, authError)
+			escapedErr := html.EscapeString(authError)
+			fmt.Fprintf(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #ff6b6b; padding: 40px; text-align: center;"><h2>Authentication Failed</h2><p>%s</p><p>You may close this tab.</p></body></html>`, escapedErr)
 			resultCh <- CallbackResult{
 				Error: fmt.Errorf("spotify auth error: %s", authError),
 				State: state,

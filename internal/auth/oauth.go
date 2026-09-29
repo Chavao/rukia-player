@@ -25,7 +25,6 @@ var SpotifyScopes = []string{
 	"user-read-currently-playing",
 	"playlist-read-private",
 	"playlist-read-collaborative",
-	"user-library-read",
 	"streaming",
 }
 
