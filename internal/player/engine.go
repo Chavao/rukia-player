@@ -178,7 +178,6 @@ func NewEngine(deviceName string) *Engine {
 	}
 	return &Engine{
 		deviceName: deviceName,
-		errCh:      make(chan error, 1),
 		volume:     100,
 	}
 }
@@ -193,7 +192,7 @@ func (e *Engine) Start(parentCtx context.Context, username, accessToken string) 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if e.running {
+	if e.running || e.app != nil {
 		return errors.New("player engine is already running")
 	}
 
@@ -237,26 +236,34 @@ func (e *Engine) Start(parentCtx context.Context, username, accessToken string) 
 	}
 
 	ctx, cancel := context.WithCancel(parentCtx)
+	e.startRun(ctx, cancel, app, app.Run)
+
+	return nil
+}
+
+// startRun is called with e.mu held after the daemon has been initialized.
+func (e *Engine) startRun(ctx context.Context, cancel context.CancelFunc, app *daemon.App, run func(context.Context) error) {
 	e.cancel = cancel
 	e.app = app
-	e.doneCh = make(chan struct{})
 	e.errCh = make(chan error, 1)
+	e.doneCh = make(chan struct{})
 	e.running = true
 	doneCh := e.doneCh
 	errCh := e.errCh
 
 	go func() {
-		defer close(doneCh)
-		err := app.Run(ctx)
+		err := run(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			select {
 			case errCh <- err:
 			default:
 			}
 		}
+		e.mu.Lock()
+		e.running = false
+		close(doneCh)
+		e.mu.Unlock()
 	}()
-
-	return nil
 }
 
 // SetVolume updates the engine initial volume.
@@ -280,21 +287,21 @@ func (e *Engine) Volume() int {
 	return e.volume
 }
 
-// Errors returns a channel to monitor background engine failures.
+// Errors returns the current run's error channel, or nil before the first run.
 func (e *Engine) Errors() <-chan error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.errCh
 }
 
-// Done closes when the current daemon run exits.
+// Done closes when the current daemon run exits, or is nil before the first run.
 func (e *Engine) Done() <-chan struct{} {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.doneCh
 }
 
-// Running reports whether the daemon was started and has not been closed.
+// Running reports whether the daemon's Run method is still active.
 func (e *Engine) Running() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -304,21 +311,20 @@ func (e *Engine) Running() bool {
 // Close gracefully stops the player daemon and releases audio resources.
 func (e *Engine) Close() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	cancel := e.cancel
+	app := e.app
+	e.cancel = nil
+	e.app = nil
+	e.mu.Unlock()
 
-	if !e.running {
-		return nil
+	if cancel != nil {
+		cancel()
 	}
 
-	e.running = false
-	if e.cancel != nil {
-		e.cancel()
-	}
-
-	if e.app != nil {
+	if app != nil {
 		done := make(chan struct{})
 		go func() {
-			_ = e.app.Close()
+			_ = app.Close()
 			close(done)
 		}()
 
@@ -326,7 +332,6 @@ func (e *Engine) Close() error {
 		case <-done:
 		case <-time.After(2 * time.Second):
 		}
-		e.app = nil
 	}
 
 	return nil

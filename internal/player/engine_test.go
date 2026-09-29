@@ -2,9 +2,11 @@ package player
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMemoryStateStore(t *testing.T) {
@@ -81,11 +83,95 @@ func TestEngineVolume(t *testing.T) {
 
 func TestEngineErrorsChannel(t *testing.T) {
 	engine := NewEngine("rukia-err-test")
-	if engine.Errors() == nil {
-		t.Fatal("expected non-nil errors channel")
+	if engine.Errors() != nil {
+		t.Fatal("expected no error channel before start")
 	}
 	if engine.Done() != nil || engine.Running() {
 		t.Fatal("new engine must not report a running daemon")
+	}
+}
+
+func TestEngineRunChannelsAndTermination(t *testing.T) {
+	engine := NewEngine("rukia-run-test")
+	finished := make(chan struct{})
+	runErr := errors.New("daemon stopped")
+	engine.mu.Lock()
+	engine.startRun(context.Background(), func() {}, nil, func(context.Context) error {
+		<-finished
+		return runErr
+	})
+	engine.mu.Unlock()
+
+	errorsCh, doneCh := engine.Errors(), engine.Done()
+	if errorsCh == nil || doneCh == nil || !engine.Running() {
+		t.Fatal("expected active run with both channels")
+	}
+	if engine.Errors() != errorsCh || engine.Done() != doneCh {
+		t.Fatal("run channels changed while daemon was active")
+	}
+	select {
+	case <-doneCh:
+		t.Fatal("run ended before daemon returned")
+	default:
+	}
+
+	close(finished)
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("waiter remained blocked after daemon terminated")
+	}
+	if engine.Running() {
+		t.Fatal("daemon termination must clear running state")
+	}
+	if engine.Errors() != errorsCh || engine.Done() != doneCh {
+		t.Fatal("completed run channels changed")
+	}
+	select {
+	case err := <-errorsCh:
+		if !errors.Is(err, runErr) {
+			t.Fatalf("expected daemon error, got %v", err)
+		}
+	default:
+		t.Fatal("expected final daemon error before completion")
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close after daemon termination: %v", err)
+	}
+}
+
+func TestEngineCloseCancelsRunAndIsIdempotent(t *testing.T) {
+	engine := NewEngine("rukia-close-test")
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close before start: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	engine.mu.Lock()
+	engine.startRun(ctx, cancel, nil, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	engine.mu.Unlock()
+	doneCh := engine.Done()
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close active run: %v", err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("repeated close: %v", err)
+	}
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("close left a waiter blocked")
+	}
+	if engine.Running() {
+		t.Fatal("engine reports running after cancellation completed")
+	}
+	select {
+	case err := <-engine.Errors():
+		t.Fatalf("context cancellation should not be reported as an error: %v", err)
+	default:
 	}
 }
 
