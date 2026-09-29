@@ -155,11 +155,14 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) waitForPlayerErrorCmd() tea.Cmd {
-	if m.playerEngine == nil || !m.playerEngine.Running() {
+	if m.playerEngine == nil {
 		return nil
 	}
 	errCh := m.playerEngine.Errors()
 	doneCh := m.playerEngine.Done()
+	if doneCh == nil {
+		return nil
+	}
 	return func() tea.Msg {
 		select {
 		case err := <-errCh:
