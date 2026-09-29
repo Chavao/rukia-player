@@ -268,6 +268,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionResultMsg:
 		if msg.err != nil {
 			cmds = append(cmds, m.showError(fmt.Errorf("failed to %s: %w", msg.action, msg.err), 3*time.Second))
+		} else {
+			cmds = append(cmds, m.pollPlaybackCmd())
 		}
 
 	case errMsg:

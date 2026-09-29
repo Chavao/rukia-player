@@ -306,6 +306,24 @@ func TestModelActionResultMsgAndErrorDisplay(t *testing.T) {
 	}
 }
 
+func TestSuccessfulRemoteActionPollsImmediately(t *testing.T) {
+	polls := 0
+	model := NewModel(&mockSpotifyController{getPlaybackStateFunc: func(context.Context) (*spotify.PlaybackState, error) {
+		polls++
+		return &spotify.PlaybackState{IsPlaying: true}, nil
+	}}, nil, nil, nil, "device")
+	for _, action := range []string{"play track", "change volume", "toggle shuffle", "toggle repeat"} {
+		_, cmd := model.Update(actionResultMsg{action: action})
+		if cmd == nil {
+			t.Fatalf("%s did not schedule reconciliation", action)
+		}
+		model.Update(cmd())
+	}
+	if polls != 4 {
+		t.Fatalf("got %d immediate polls, want 4", polls)
+	}
+}
+
 func TestOlderErrorTimerDoesNotClearNewError(t *testing.T) {
 	model := NewModel(nil, nil, nil, nil, "dev-1")
 	model.Update(errMsg{err: assertErr("first")})
