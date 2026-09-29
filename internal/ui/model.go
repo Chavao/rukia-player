@@ -61,15 +61,20 @@ type Model struct {
 	volumeSettings VolumeSettings
 	trackIndex     map[string]int
 
-	cursor           int
-	playingIdx       int
-	isPlaying        bool
-	confirmedPlaying bool
-	playbackPending  bool
-	progressMs       int
-	volume           int
-	repeatMode       string
-	shuffle          bool
+	cursor            int
+	playingIdx        int
+	isPlaying         bool
+	confirmedPlaying  bool
+	desiredPlaying    bool
+	playbackPending   bool
+	playbackReconcile bool
+	playbackVersion   uint64
+	requestedVersion  uint64
+	failedVersion     uint64
+	progressMs        int
+	volume            int
+	repeatMode        string
+	shuffle           bool
 
 	showExitModal bool
 	exitDialog    ExitDialog
@@ -116,6 +121,7 @@ func NewModel(
 		playingIdx:       0,
 		isPlaying:        true,
 		confirmedPlaying: true,
+		desiredPlaying:   true,
 		progressMs:       0,
 		volume:           vol,
 		repeatMode:       "off",
@@ -216,8 +222,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playbackStateMsg:
 		if msg != nil {
 			if !m.playbackPending {
-				m.isPlaying = msg.IsPlaying
 				m.confirmedPlaying = msg.IsPlaying
+				if m.playbackReconcile {
+					m.playbackReconcile = false
+					if m.desiredPlaying != m.confirmedPlaying && m.playbackVersion > m.failedVersion {
+						cmds = append(cmds, m.startPlaybackCommand())
+					} else {
+						m.isPlaying = m.confirmedPlaying
+					}
+				} else {
+					m.desiredPlaying = msg.IsPlaying
+					m.isPlaying = msg.IsPlaying
+				}
 			}
 			m.progressMs = msg.ProgressMs
 			m.repeatMode = msg.RepeatState
@@ -239,15 +255,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.playbackPending = false
 		if msg.err != nil {
 			cmds = append(cmds, m.showError(fmt.Errorf("failed to toggle playback: %w", msg.err), 3*time.Second))
+			m.failedVersion = m.requestedVersion
+			m.playbackReconcile = true
+			cmds = append(cmds, m.pollPlaybackCmd())
 		} else {
 			m.confirmedPlaying = msg.playing
-		}
-		if m.isPlaying != m.confirmedPlaying {
-			if msg.err != nil && m.isPlaying == msg.playing {
-				m.isPlaying = m.confirmedPlaying
-			} else {
-				m.playbackPending = true
-				cmds = append(cmds, m.togglePlayPauseCmd(m.isPlaying))
+			if m.desiredPlaying != m.confirmedPlaying {
+				cmds = append(cmds, m.startPlaybackCommand())
 			}
 		}
 
@@ -359,100 +373,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) togglePlayback() tea.Cmd {
-	m.isPlaying = !m.isPlaying
-	if m.playbackPending {
+	m.desiredPlaying = !m.desiredPlaying
+	m.isPlaying = m.desiredPlaying
+	m.playbackVersion++
+	if m.playbackPending || m.playbackReconcile {
 		return nil
 	}
+	if m.desiredPlaying == m.confirmedPlaying {
+		return nil
+	}
+	return m.startPlaybackCommand()
+}
+
+func (m *Model) startPlaybackCommand() tea.Cmd {
 	m.playbackPending = true
-	return m.togglePlayPauseCmd(m.isPlaying)
+	m.requestedVersion = m.playbackVersion
+	m.isPlaying = m.desiredPlaying
+	return m.togglePlayPauseCmd(m.desiredPlaying)
 }
 
 func (m *Model) showError(err error, duration time.Duration) tea.Cmd {
 	m.err = err
 	m.errorGeneration++
 	return clearErrorCmd(duration, m.errorGeneration)
-}
-
-func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
-	client := m.spotifyClient
-	deviceID := m.deviceID
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-
-		var err error
-		if shouldPlay {
-			if client != nil {
-				err = client.Resume(ctx, deviceID)
-			}
-		} else {
-			if client != nil {
-				err = client.Pause(ctx, deviceID)
-			}
-		}
-		return playbackChangedMsg{playing: shouldPlay, err: err}
-	}
-}
-
-func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
-	client := m.spotifyClient
-	deviceID := m.deviceID
-	uri := ""
-	if m.playlist != nil {
-		uri = m.playlist.URI
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var err error
-		if client != nil && uri != "" {
-			err = client.PlayPlaylist(ctx, deviceID, uri, idx)
-		}
-		return actionResultMsg{action: "play track", err: err}
-	}
-}
-
-func (m *Model) setVolumeCmd(vol int) tea.Cmd {
-	client := m.spotifyClient
-	deviceID := m.deviceID
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		var err error
-		if client != nil {
-			err = client.SetVolume(ctx, deviceID, vol)
-		}
-		return actionResultMsg{action: "change volume", err: err}
-	}
-}
-
-func (m *Model) setShuffleCmd(shuf bool) tea.Cmd {
-	client := m.spotifyClient
-	deviceID := m.deviceID
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		var err error
-		if client != nil {
-			err = client.SetShuffle(ctx, deviceID, shuf)
-		}
-		return actionResultMsg{action: "toggle shuffle", err: err}
-	}
-}
-
-func (m *Model) setRepeatCmd(mode string) tea.Cmd {
-	client := m.spotifyClient
-	deviceID := m.deviceID
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		var err error
-		if client != nil {
-			err = client.SetRepeat(ctx, deviceID, mode)
-		}
-		return actionResultMsg{action: "toggle repeat", err: err}
-	}
 }
 
 // View assembles the complete TUI rendering.

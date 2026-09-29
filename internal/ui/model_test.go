@@ -104,8 +104,80 @@ func TestModelPlaybackChangedMsg(t *testing.T) {
 		t.Fatal("second key must optimistically resume playback")
 	}
 	model.Update(playbackChangedMsg{playing: true, err: assertErr("failed")})
-	if model.isPlaying || model.playbackPending {
-		t.Fatal("failed resume must restore the confirmed state")
+	if !model.desiredPlaying || model.playbackPending || !model.playbackReconcile {
+		t.Fatal("failed resume must preserve intent and request reconciliation")
+	}
+}
+
+func TestPlaybackToggleSequences(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		initial    bool
+		toggles    int
+		firstFails bool
+		wantCalls  []string
+		wantState  bool
+	}{
+		{"pause success", true, 1, false, []string{"pause"}, false},
+		{"resume success", false, 1, false, []string{"resume"}, true},
+		{"pause failure", true, 1, true, []string{"pause"}, true},
+		{"resume failure", false, 1, true, []string{"resume"}, false},
+		{"pause then resume", true, 2, false, []string{"pause", "resume"}, true},
+		{"pause then resume after failure", true, 2, true, []string{"pause"}, true},
+		{"pause resume pause", true, 3, false, []string{"pause"}, false},
+		{"pause resume pause after failure", true, 3, true, []string{"pause", "pause"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			mock := &mockSpotifyController{
+				pauseFunc:  func(context.Context, string) error { calls = append(calls, "pause"); return nil },
+				resumeFunc: func(context.Context, string) error { calls = append(calls, "resume"); return nil },
+			}
+			model := NewModel(mock, nil, nil, nil, "device")
+			model.isPlaying, model.desiredPlaying, model.confirmedPlaying = tc.initial, tc.initial, tc.initial
+			var firstCmd tea.Cmd
+			for i := 0; i < tc.toggles; i++ {
+				_, cmd := model.Update(tea.KeyMsg{Type: tea.KeySpace})
+				if i == 0 {
+					firstCmd = cmd
+				}
+			}
+			if len(calls) != 0 {
+				t.Fatal("Update performed remote I/O")
+			}
+			if model.desiredPlaying != (tc.initial != (tc.toggles%2 == 1)) {
+				t.Fatalf("wrong desired state: %v", model.desiredPlaying)
+			}
+			// The first command is the only one allowed to run while pending.
+			firstMsg := firstCmd()
+			if tc.firstFails {
+				firstMsg = playbackChangedMsg{playing: !tc.initial, err: assertErr("failed")}
+			}
+			_, next := model.Update(firstMsg)
+			if tc.firstFails {
+				if !model.playbackReconcile {
+					t.Fatal("failure did not start reconciliation")
+				}
+				if model.desiredPlaying != (tc.initial != (tc.toggles%2 == 1)) {
+					t.Fatal("failure discarded desired state")
+				}
+				_, next = model.Update(playbackStateMsg(&spotify.PlaybackState{IsPlaying: tc.initial}))
+			}
+			if model.playbackPending {
+				model.Update(next().(playbackChangedMsg))
+			}
+			if model.confirmedPlaying != tc.wantState {
+				t.Fatalf("confirmed=%v, want %v", model.confirmedPlaying, tc.wantState)
+			}
+			if len(calls) != len(tc.wantCalls) {
+				t.Fatalf("calls=%v, want %v", calls, tc.wantCalls)
+			}
+			for i := range calls {
+				if calls[i] != tc.wantCalls[i] {
+					t.Fatalf("calls=%v, want %v", calls, tc.wantCalls)
+				}
+			}
+		})
 	}
 }
 
@@ -124,6 +196,40 @@ func TestRapidPlaybackTogglesAreSerialized(t *testing.T) {
 	model.Update(playbackChangedMsg{playing: true})
 	if model.playbackPending || !model.confirmedPlaying || !model.isPlaying {
 		t.Fatal("queued resume must complete in order")
+	}
+}
+
+func TestFailedPlaybackReconcilesRemoteStateAndPreservesNewIntent(t *testing.T) {
+	state := &spotify.PlaybackState{
+		IsPlaying: true, ProgressMs: 42000, ShuffleState: true, RepeatState: "context",
+		Item: &spotify.Track{ID: "second"}, Device: &spotify.Device{VolumePercent: 31},
+	}
+	polls := 0
+	mock := &mockSpotifyController{getPlaybackStateFunc: func(context.Context) (*spotify.PlaybackState, error) {
+		polls++
+		return state, nil
+	}}
+	model := NewModel(mock, nil, nil, &spotify.Playlist{Tracks: []spotify.Track{{ID: "first"}, {ID: "second"}}}, "device")
+	model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	_, cmd := model.Update(playbackChangedMsg{playing: false, err: assertErr("offline")})
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("expected error timer and immediate poll, got %T", cmd())
+	}
+	if polls != 0 {
+		t.Fatal("poll ran synchronously in Update")
+	}
+	model.Update(batch[1]())
+	if polls != 1 {
+		t.Fatalf("expected immediate poll, got %d", polls)
+	}
+	if model.progressMs != 42000 || model.volume != 31 || !model.shuffle || model.repeatMode != "context" || model.playingIdx != 1 {
+		t.Fatalf("reconciliation missed remote fields: %+v", model)
+	}
+	if model.desiredPlaying || !model.confirmedPlaying || !model.playbackPending {
+		t.Fatalf("newer pause intent was discarded: desired=%v confirmed=%v pending=%v", model.desiredPlaying, model.confirmedPlaying, model.playbackPending)
 	}
 }
 
