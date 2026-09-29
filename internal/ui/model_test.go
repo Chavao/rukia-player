@@ -391,8 +391,55 @@ func TestModelVolumePersistence(t *testing.T) {
 	if model.volume != 5 {
 		t.Errorf("expected volume 5 after VolumeUp, got %d", model.volume)
 	}
+	if cfg.CurrentVolume() != 0 {
+		t.Fatal("Update persisted volume synchronously")
+	}
+	_, cmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load()})
+	if cmd == nil {
+		t.Fatal("expected persistence command")
+	}
+	model.Update(cmd())
 	if cfg.CurrentVolume() != 5 {
 		t.Errorf("expected cfg.Volume to be updated to 5, got %d", cfg.CurrentVolume())
+	}
+}
+
+type volumeSettingsStub struct {
+	volume int
+	calls  int
+	err    error
+}
+
+func (s *volumeSettingsStub) CurrentVolume() int { return s.volume }
+func (s *volumeSettingsStub) SetVolume(v int) error {
+	s.calls++
+	if s.err == nil {
+		s.volume = v
+	}
+	return s.err
+}
+
+func TestVolumePersistenceFailureAndExit(t *testing.T) {
+	settings := &volumeSettingsStub{volume: 5, err: errors.New("disk full")}
+	model := NewModel(nil, nil, nil, nil, "", settings)
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}})
+	if model.volume != 0 || settings.calls != 0 {
+		t.Fatal("volume zero must update only in model before command")
+	}
+	_, cmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load()})
+	model.Update(cmd())
+	if model.err == nil || !strings.Contains(model.err.Error(), "failed to save volume") {
+		t.Fatalf("missing persistence error: %v", model.err)
+	}
+	settings.err = nil
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	_, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if settings.calls != 1 || cmd == nil {
+		t.Fatal("exit must persist via command")
+	}
+	_, quit := model.Update(cmd())
+	if settings.volume != 0 || quit == nil {
+		t.Fatal("exit must persist current zero volume before quitting")
 	}
 }
 

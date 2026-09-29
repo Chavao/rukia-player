@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Chavao/rukia-player/internal/player"
@@ -25,6 +27,11 @@ type playbackChangedMsg struct {
 type actionResultMsg struct {
 	action string
 	err    error
+}
+type volumePersistMsg struct{ generation uint64 }
+type volumePersistedMsg struct {
+	err     error
+	exiting bool
 }
 type clearErrorMsg struct{ generation uint64 }
 
@@ -73,6 +80,9 @@ type Model struct {
 	failedVersion     uint64
 	progressMs        int
 	volume            int
+	volumeGeneration  atomic.Uint64
+	volumeWriteMu     sync.Mutex
+	exitPending       bool
 	repeatMode        string
 	shuffle           bool
 
@@ -272,6 +282,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.pollPlaybackCmd())
 		}
 
+	case volumePersistMsg:
+		if msg.generation == m.volumeGeneration.Load() {
+			cmds = append(cmds, m.persistVolumeCmd(false))
+		}
+
+	case volumePersistedMsg:
+		if msg.err != nil {
+			m.exitPending = false
+			cmds = append(cmds, m.showError(fmt.Errorf("failed to save volume: %w", msg.err), 3*time.Second))
+		} else if msg.exiting {
+			if m.playerEngine != nil {
+				_ = m.playerEngine.Close()
+			}
+			return m, tea.Quit
+		}
+
 	case errMsg:
 		cmds = append(cmds, m.showError(msg.err, 3*time.Second))
 
@@ -283,13 +309,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// When exit modal is displayed, route keys exclusively to modal
 		if m.showExitModal {
+			if m.exitPending {
+				return m, nil
+			}
 			switch {
 			case key.Matches(msg, m.keys.Left), key.Matches(msg, m.keys.Right):
 				m.exitDialog.Next()
 			case key.Matches(msg, m.keys.Enter):
 				if m.exitDialog.Selected == ExitOptionYes {
 					if m.volumeSettings != nil {
-						_ = m.volumeSettings.SetVolume(m.volume)
+						m.exitPending = true
+						m.volumeGeneration.Add(1)
+						return m, m.persistVolumeCmd(true)
 					}
 					if m.playerEngine != nil {
 						_ = m.playerEngine.Close()
@@ -339,10 +370,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume > 100 {
 					m.volume = 100
 				}
-				if m.volumeSettings != nil {
-					_ = m.volumeSettings.SetVolume(m.volume)
-				}
-				cmds = append(cmds, m.setVolumeCmd(m.volume))
+				cmds = append(cmds, m.setVolumeCmd(m.volume), m.scheduleVolumePersist())
 			}
 
 		case key.Matches(msg, m.keys.VolumeDn):
@@ -351,10 +379,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume < 0 {
 					m.volume = 0
 				}
-				if m.volumeSettings != nil {
-					_ = m.volumeSettings.SetVolume(m.volume)
-				}
-				cmds = append(cmds, m.setVolumeCmd(m.volume))
+				cmds = append(cmds, m.setVolumeCmd(m.volume), m.scheduleVolumePersist())
 			}
 
 		case key.Matches(msg, m.keys.Shuffle):
