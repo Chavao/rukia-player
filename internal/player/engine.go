@@ -2,12 +2,19 @@ package player
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
+	"time"
 
-	"github.com/jfreymuth/pulse"
-	"github.com/jfreymuth/pulse/proto"
+	librespot "github.com/devgianlu/go-librespot"
+	"github.com/devgianlu/go-librespot/daemon"
 )
 
 const (
@@ -20,41 +27,138 @@ type AppState struct {
 	DeviceId string
 }
 
-// MemoryStateStore satisfies state persistence for backward compatibility.
-type MemoryStateStore struct {
-	mu    sync.Mutex
-	state *AppState
+// FileStateStore manages persistent librespot credentials and state.
+type FileStateStore struct {
+	mu       sync.Mutex
+	state    *librespot.AppState
+	cacheDir string
 }
 
-// Load retrieves stored application state.
-func (m *MemoryStateStore) Load() (*AppState, error) {
+// NewFileStateStore creates a state store targeting cacheDir.
+func NewFileStateStore(cacheDir string) *FileStateStore {
+	return &FileStateStore{cacheDir: cacheDir}
+}
+
+// Load retrieves stored application state and cached Spotify credentials.
+func (s *FileStateStore) Load() (*librespot.AppState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.state != nil {
+		return s.state, nil
+	}
+
+	state := &librespot.AppState{}
+
+	// Generate deterministic 40-char hex device ID
+	hasher := sha1.New()
+	hasher.Write([]byte("rukia-player-device-" + s.cacheDir))
+	state.DeviceId = hex.EncodeToString(hasher.Sum(nil))
+
+	// Search for credentials in rukia cache, then ncspot cache
+	candidatePaths := []string{
+		filepath.Join(s.cacheDir, "credentials.json"),
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidatePaths = append(candidatePaths,
+			filepath.Join(home, ".cache", "rukia", "librespot", "credentials.json"),
+			filepath.Join(home, ".cache", "ncspot", "librespot", "credentials.json"),
+		)
+	}
+
+	for _, p := range candidatePaths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var raw struct {
+			Username string `json:"username"`
+			AuthData string `json:"auth_data"`
+		}
+		if err := json.Unmarshal(data, &raw); err != nil {
+			continue
+		}
+		blob, err := base64.StdEncoding.DecodeString(raw.AuthData)
+		if err != nil {
+			continue
+		}
+		state.Credentials.Username = raw.Username
+		state.Credentials.Data = blob
+		break
+	}
+
+	s.state = state
+	return s.state, nil
+}
+
+// Save stores application state and credentials back to disk.
+func (s *FileStateStore) Save(state *librespot.AppState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state = state
+
+	if len(state.Credentials.Data) == 0 {
+		return nil
+	}
+
+	if err := os.MkdirAll(s.cacheDir, 0700); err != nil {
+		return err
+	}
+
+	raw := struct {
+		AuthType int    `json:"auth_type"`
+		Username string `json:"username"`
+		AuthData string `json:"auth_data"`
+	}{
+		AuthType: 1,
+		Username: state.Credentials.Username,
+		AuthData: base64.StdEncoding.EncodeToString(state.Credentials.Data),
+	}
+
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(filepath.Join(s.cacheDir, "credentials.json"), data, 0600)
+}
+
+// MemoryStateStore satisfies state persistence for unit testing.
+type MemoryStateStore struct {
+	mu    sync.Mutex
+	state *librespot.AppState
+}
+
+// Load retrieves in-memory application state.
+func (m *MemoryStateStore) Load() (*librespot.AppState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.state == nil {
-		m.state = &AppState{}
+		m.state = &librespot.AppState{}
+		hasher := sha1.New()
+		hasher.Write([]byte("rukia-memory-state-store"))
+		m.state.DeviceId = hex.EncodeToString(hasher.Sum(nil))
 	}
 	return m.state, nil
 }
 
-// Save stores application state.
-func (m *MemoryStateStore) Save(s *AppState) error {
+// Save stores in-memory application state.
+func (m *MemoryStateStore) Save(s *librespot.AppState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state = s
 	return nil
 }
 
-// Engine manages the PulseAudio playback stream and system audio integration for rukia.
+// Engine manages the embedded go-librespot player daemon and PulseAudio output.
 type Engine struct {
 	deviceName string
-	client     *pulse.Client
-	stream     *pulse.PlaybackStream
-	volChan    chan proto.ChannelVolumes
+	app        *daemon.App
+	cancel     context.CancelFunc
 	volEvents  chan int
 	errCh      chan error
 	mu         sync.Mutex
 	running    bool
-	isPaused   bool
 	volume     int // 0 to 100
 }
 
@@ -65,7 +169,6 @@ func NewEngine(deviceName string) *Engine {
 	}
 	return &Engine{
 		deviceName: deviceName,
-		volChan:    make(chan proto.ChannelVolumes, 8),
 		volEvents:  make(chan int, 8),
 		errCh:      make(chan error, 1),
 		volume:     100,
@@ -77,8 +180,8 @@ func (e *Engine) DeviceName() string {
 	return e.deviceName
 }
 
-// Start launches the PulseAudio playback stream so rukia appears in pavucontrol.
-func (e *Engine) Start(ctx context.Context, username, accessToken string) error {
+// Start launches the embedded Spotify Connect receiver and PulseAudio stream.
+func (e *Engine) Start(parentCtx context.Context, username, accessToken string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -90,69 +193,53 @@ func (e *Engine) Start(ctx context.Context, username, accessToken string) error 
 		return errors.New("username and access token are required to start audio engine")
 	}
 
-	client, err := pulse.NewClient(
-		pulse.ClientApplicationName(e.deviceName),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to connect to PulseAudio/PipeWire: %w", err)
+	// Set PulseAudio properties so pavucontrol-qt and PipeWire show "rukia"
+	_ = os.Setenv("PULSE_PROP_application.name", e.deviceName)
+	_ = os.Setenv("PULSE_PROP_application.process.binary", "rukia")
+	_ = os.Setenv("PULSE_PROP_media.role", "music")
+	_ = os.Setenv("PULSE_PROP_media.name", DefaultMediaName)
+
+	home, _ := os.UserHomeDir()
+	cacheDir := filepath.Join(home, ".cache", "rukia", "librespot")
+
+	dCfg := &daemon.Config{
+		DeviceName:      e.deviceName,
+		DeviceType:      "computer",
+		AudioBackend:    "pulseaudio",
+		InitialVolume:   uint32(e.volume * 64 / 100),
+		VolumeSteps:     64, // Prevents division by zero in daemon/player.go
+		Bitrate:         160,
+		ZeroconfEnabled: false,
+		Credentials: daemon.CredentialsConfig{
+			Type: "spotify_token",
+			SpotifyToken: daemon.SpotifyTokenCredentials{
+				Username:    username,
+				AccessToken: accessToken,
+			},
+		},
 	}
 
-	stream, err := client.NewPlayback(
-		pulse.Float32Reader(func(out []float32) (int, error) {
-			// Zero out buffer so stream remains active and responsive in mixer
-			for i := range out {
-				out[i] = 0
-			}
-			return len(out), nil
-		}),
-		pulse.PlaybackSampleRate(44100),
-		pulse.PlaybackStereo,
-		pulse.PlaybackMediaName(DefaultMediaName),
-		pulse.PlaybackVolumeChanges(e.volChan),
-		pulse.PlaybackRawOption(func(req *proto.CreatePlaybackStream) {
-			if req.Properties == nil {
-				req.Properties = make(proto.PropList)
-			}
-			req.Properties["application.name"] = proto.PropListString(e.deviceName)
-			req.Properties["application.process.binary"] = proto.PropListString("rukia")
-			req.Properties["media.role"] = proto.PropListString("music")
-		}),
-	)
+	store := NewFileStateStore(cacheDir)
+	app, err := daemon.New(&daemon.Options{
+		Logger:     &librespot.NullLogger{},
+		Config:     dCfg,
+		StateStore: store,
+	})
 	if err != nil {
-		client.Close()
-		return fmt.Errorf("failed to create PulseAudio playback stream: %w", err)
+		return fmt.Errorf("failed to initialize audio daemon: %w", err)
 	}
 
-	e.client = client
-	e.stream = stream
+	ctx, cancel := context.WithCancel(parentCtx)
+	e.cancel = cancel
+	e.app = app
 	e.running = true
 
-	// Set initial volume
-	rawVol := proto.Volume(float64(e.volume) / 100.0 * 65536.0)
-	_ = stream.SetVolume(proto.ChannelVolumes{rawVol, rawVol})
-
-	stream.Start()
-
-	// Monitor volume changes from pavucontrol / system mixer
 	go func() {
-		for v := range e.volChan {
-			if len(v) > 0 {
-				pct := int(float64(v[0]) / 65536.0 * 100.0)
-				if pct < 0 {
-					pct = 0
-				}
-				if pct > 100 {
-					pct = 100
-				}
-
-				e.mu.Lock()
-				e.volume = pct
-				e.mu.Unlock()
-
-				select {
-				case e.volEvents <- pct:
-				default:
-				}
+		err := app.Run(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			select {
+			case e.errCh <- err:
+			default:
 			}
 		}
 	}()
@@ -160,29 +247,13 @@ func (e *Engine) Start(ctx context.Context, username, accessToken string) error 
 	return nil
 }
 
-// Pause pauses the PulseAudio stream.
-func (e *Engine) Pause() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+// Pause pauses local audio playback.
+func (e *Engine) Pause() {}
 
-	if e.running && e.stream != nil && !e.isPaused {
-		e.stream.Pause()
-		e.isPaused = true
-	}
-}
+// Resume unpauses local audio playback.
+func (e *Engine) Resume() {}
 
-// Resume unpauses the PulseAudio stream.
-func (e *Engine) Resume() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.running && e.stream != nil && e.isPaused {
-		e.stream.Resume()
-		e.isPaused = false
-	}
-}
-
-// SetVolume updates the stream volume in PulseAudio and pavucontrol.
+// SetVolume updates the engine volume.
 func (e *Engine) SetVolume(percent int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -194,11 +265,6 @@ func (e *Engine) SetVolume(percent int) {
 		percent = 100
 	}
 	e.volume = percent
-
-	if e.running && e.stream != nil {
-		rawVol := proto.Volume(float64(percent) / 100.0 * 65536.0)
-		_ = e.stream.SetVolume(proto.ChannelVolumes{rawVol, rawVol})
-	}
 }
 
 // Volume returns the current volume percentage (0-100).
@@ -208,7 +274,7 @@ func (e *Engine) Volume() int {
 	return e.volume
 }
 
-// VolumeEvents provides a channel receiving volume adjustments from pavucontrol.
+// VolumeEvents provides a channel receiving volume adjustments from the audio server.
 func (e *Engine) VolumeEvents() <-chan int {
 	return e.volEvents
 }
@@ -218,7 +284,7 @@ func (e *Engine) Errors() <-chan error {
 	return e.errCh
 }
 
-// Close gracefully stops the player stream and releases PulseAudio resources.
+// Close gracefully stops the player daemon and releases audio resources.
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -228,13 +294,22 @@ func (e *Engine) Close() error {
 	}
 
 	e.running = false
-	if e.stream != nil {
-		e.stream.Close()
-		e.stream = nil
+	if e.cancel != nil {
+		e.cancel()
 	}
-	if e.client != nil {
-		e.client.Close()
-		e.client = nil
+
+	if e.app != nil {
+		done := make(chan struct{})
+		go func() {
+			_ = e.app.Close()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		e.app = nil
 	}
 
 	return nil

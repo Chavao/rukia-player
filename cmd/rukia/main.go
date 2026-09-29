@@ -140,7 +140,7 @@ func main() {
 	// 8. Find target device (rukia or active device)
 	var targetDeviceID string
 	// Allow a moment for the connect receiver to register
-	for attempts := 0; attempts < 5; attempts++ {
+	for attempts := 0; attempts < 8; attempts++ {
 		devices, err := spotifyClient.GetDevices(ctx)
 		if err == nil {
 			for _, d := range devices {
@@ -153,7 +153,7 @@ func main() {
 				break
 			}
 			// If rukia not found yet but active device exists, pick active
-			if attempts == 4 && len(devices) > 0 {
+			if attempts == 7 && len(devices) > 0 {
 				for _, d := range devices {
 					if d.IsActive {
 						targetDeviceID = d.ID
@@ -171,6 +171,7 @@ func main() {
 	// 9. Start initial playback
 	if targetDeviceID != "" {
 		_ = spotifyClient.TransferPlayback(ctx, targetDeviceID, true)
+		time.Sleep(250 * time.Millisecond)
 		_ = spotifyClient.PlayPlaylist(ctx, targetDeviceID, playlist.URI, 0)
 	} else {
 		// Attempt playback without explicit device

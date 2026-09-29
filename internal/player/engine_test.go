@@ -2,6 +2,7 @@ package player
 
 import (
 	"context"
+	"os"
 	"testing"
 )
 
@@ -80,3 +81,42 @@ func TestEngineVolume(t *testing.T) {
 	engine.Pause()
 	engine.Resume()
 }
+
+func TestFileStateStore(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "rukia-state-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store := NewFileStateStore(tempDir)
+	state, err := store.Load()
+	if err != nil {
+		t.Fatalf("failed to load state: %v", err)
+	}
+
+	if len(state.DeviceId) != 40 {
+		t.Errorf("expected 40-character hex device ID, got %d chars (%s)", len(state.DeviceId), state.DeviceId)
+	}
+
+	state.Credentials.Username = "testuser"
+	state.Credentials.Data = []byte("test-data-blob")
+	if err := store.Save(state); err != nil {
+		t.Fatalf("failed to save state: %v", err)
+	}
+
+	// Reload from new instance pointing to same directory
+	reloadedStore := NewFileStateStore(tempDir)
+	reloadedState, err := reloadedStore.Load()
+	if err != nil {
+		t.Fatalf("failed to reload state: %v", err)
+	}
+
+	if reloadedState.Credentials.Username != "testuser" {
+		t.Errorf("expected username 'testuser', got %s", reloadedState.Credentials.Username)
+	}
+	if string(reloadedState.Credentials.Data) != "test-data-blob" {
+		t.Errorf("expected blob 'test-data-blob', got %s", string(reloadedState.Credentials.Data))
+	}
+}
+
