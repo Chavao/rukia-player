@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -271,3 +273,133 @@ func TestModelTrackIndexLookup(t *testing.T) {
 		t.Errorf("expected playingIdx to be 2 for track-c, got %d", updated.playingIdx)
 	}
 }
+
+type mockSpotifyController struct {
+	getPlaybackStateFunc func(ctx context.Context) (*spotify.PlaybackState, error)
+	pauseFunc            func(ctx context.Context, deviceID string) error
+	resumeFunc           func(ctx context.Context, deviceID string) error
+	playPlaylistFunc     func(ctx context.Context, deviceID, playlistURI string, trackOffset int) error
+	setVolumeFunc        func(ctx context.Context, deviceID string, volumePercent int) error
+	setShuffleFunc       func(ctx context.Context, deviceID string, state bool) error
+	setRepeatFunc        func(ctx context.Context, deviceID string, state string) error
+}
+
+func (m *mockSpotifyController) GetPlaybackState(ctx context.Context) (*spotify.PlaybackState, error) {
+	if m.getPlaybackStateFunc != nil {
+		return m.getPlaybackStateFunc(ctx)
+	}
+	return nil, nil
+}
+func (m *mockSpotifyController) Pause(ctx context.Context, deviceID string) error {
+	if m.pauseFunc != nil {
+		return m.pauseFunc(ctx, deviceID)
+	}
+	return nil
+}
+func (m *mockSpotifyController) Resume(ctx context.Context, deviceID string) error {
+	if m.resumeFunc != nil {
+		return m.resumeFunc(ctx, deviceID)
+	}
+	return nil
+}
+func (m *mockSpotifyController) PlayPlaylist(ctx context.Context, deviceID, playlistURI string, trackOffset int) error {
+	if m.playPlaylistFunc != nil {
+		return m.playPlaylistFunc(ctx, deviceID, playlistURI, trackOffset)
+	}
+	return nil
+}
+func (m *mockSpotifyController) SetVolume(ctx context.Context, deviceID string, volumePercent int) error {
+	if m.setVolumeFunc != nil {
+		return m.setVolumeFunc(ctx, deviceID, volumePercent)
+	}
+	return nil
+}
+func (m *mockSpotifyController) SetShuffle(ctx context.Context, deviceID string, state bool) error {
+	if m.setShuffleFunc != nil {
+		return m.setShuffleFunc(ctx, deviceID, state)
+	}
+	return nil
+}
+func (m *mockSpotifyController) SetRepeat(ctx context.Context, deviceID string, state string) error {
+	if m.setRepeatFunc != nil {
+		return m.setRepeatFunc(ctx, deviceID, state)
+	}
+	return nil
+}
+
+func TestModelWithMockControllerFailures(t *testing.T) {
+	mock := &mockSpotifyController{
+		pauseFunc: func(ctx context.Context, deviceID string) error {
+			return errors.New("remote device disconnected")
+		},
+		setVolumeFunc: func(ctx context.Context, deviceID string, volumePercent int) error {
+			return errors.New("rate limited")
+		},
+	}
+
+	model := NewModel(mock, nil, nil, nil, "dev-1")
+	model.width = 80
+	model.height = 24
+
+	// Test pause failure command
+	cmd := model.togglePlayPauseCmd(false)
+	msg := cmd()
+	m, _ := model.Update(msg)
+	model = m.(*Model)
+
+	if model.err == nil || !strings.Contains(model.err.Error(), "remote device disconnected") {
+		t.Fatalf("expected remote device error in model.err, got %v", model.err)
+	}
+
+	// Verify error appears in rendered footer
+	view := model.View()
+	if !strings.Contains(view, "failed to toggle playback") || !strings.Contains(view, "remote device") {
+		t.Errorf("expected view to contain error message, got:\n%s", view)
+	}
+
+	// Test volume failure command
+	volCmd := model.setVolumeCmd(50)
+	volMsg := volCmd()
+	m, _ = model.Update(volMsg)
+	model = m.(*Model)
+
+	if model.err == nil || !strings.Contains(model.err.Error(), "rate limited") {
+		t.Fatalf("expected rate limited error in model.err, got %v", model.err)
+	}
+}
+
+func TestModelExtremeTerminalDimensions(t *testing.T) {
+	tracks := []spotify.Track{
+		{ID: "t1", Name: "Short Track", DurationMs: 120000},
+	}
+	playlist := &spotify.Playlist{
+		Name:   "Testing Extremes",
+		Tracks: tracks,
+	}
+
+	model := NewModel(nil, nil, &spotify.UserProfile{DisplayName: "Tester"}, playlist, "dev-1")
+
+	dimensions := []struct {
+		width  int
+		height int
+	}{
+		{width: 0, height: 0},
+		{width: 1, height: 1},
+		{width: 10, height: 2},
+		{width: 20, height: 5},
+		{width: 80, height: 24},
+		{width: 300, height: 100},
+	}
+
+	for _, dim := range dimensions {
+		model.width = dim.width
+		model.height = dim.height
+
+		// View should not panic under any dimension
+		output := model.View()
+		if dim.width == 0 && output != "" {
+			// graceful degradation check
+		}
+	}
+}
+

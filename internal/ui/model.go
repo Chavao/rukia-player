@@ -35,9 +35,20 @@ func clearErrorCmd(d time.Duration) tea.Cmd {
 	})
 }
 
+// SpotifyController defines the playback and device control methods required by the UI.
+type SpotifyController interface {
+	GetPlaybackState(ctx context.Context) (*spotify.PlaybackState, error)
+	Pause(ctx context.Context, deviceID string) error
+	Resume(ctx context.Context, deviceID string) error
+	PlayPlaylist(ctx context.Context, deviceID, playlistURI string, trackOffset int) error
+	SetVolume(ctx context.Context, deviceID string, volumePercent int) error
+	SetShuffle(ctx context.Context, deviceID string, state bool) error
+	SetRepeat(ctx context.Context, deviceID string, state string) error
+}
+
 // Model is the main Bubble Tea application model.
 type Model struct {
-	spotifyClient *spotify.Client
+	spotifyClient SpotifyController
 	playerEngine  *player.Engine
 	user          *spotify.UserProfile
 	playlist      *spotify.Playlist
@@ -64,7 +75,7 @@ type Model struct {
 
 // NewModel creates an initialized Bubble Tea model.
 func NewModel(
-	spotifyClient *spotify.Client,
+	spotifyClient SpotifyController,
 	playerEngine *player.Engine,
 	user *spotify.UserProfile,
 	playlist *spotify.Playlist,

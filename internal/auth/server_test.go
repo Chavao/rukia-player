@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -20,28 +21,12 @@ func TestGenerateSelfSignedCert(t *testing.T) {
 	}
 }
 
-func TestHTTPSCallbackServer(t *testing.T) {
+func TestHTTPSCallbackServerEphemeralPort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Use an ephemeral port on 127.0.0.1
 	redirectURI := "https://127.0.0.1:0/callback"
-	resCh, err := StartHTTPSCallbackServer(ctx, redirectURI)
-	if err != nil {
-		// Port 0 might not be permitted directly in some parsers if net.Listen can't resolve :0;
-		// let's test with a random high port or test listener
-		t.Skipf("skipping test if port 0 listen not supported: %v", err)
-	}
-
-	_ = resCh
-}
-
-func TestHTTPSCallbackServerExplicitPort(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	redirectURI := "https://127.0.0.1:18443/callback"
-	resCh, err := StartHTTPSCallbackServer(ctx, redirectURI)
+	resCh, addr, err := StartHTTPSCallbackServerWithAddr(ctx, redirectURI)
 	if err != nil {
 		t.Fatalf("failed to start HTTPS server: %v", err)
 	}
@@ -52,7 +37,7 @@ func TestHTTPSCallbackServerExplicitPort(t *testing.T) {
 	}
 	client := &http.Client{Transport: tr, Timeout: 3 * time.Second}
 
-	resp, err := client.Get("https://127.0.0.1:18443/callback?code=test_code_123&state=xyz")
+	resp, err := client.Get(fmt.Sprintf("https://%s/callback?code=test_code_123&state=xyz", addr))
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -80,9 +65,8 @@ func TestHTTPSCallbackServerExplicitPort(t *testing.T) {
 
 func TestHTTPSCallbackServerContextCancel(t *testing.T) {
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	redirectURI := "https://127.0.0.1:18444/callback"
 
-	_, err := StartHTTPSCallbackServer(ctx1, redirectURI)
+	_, addr, err := StartHTTPSCallbackServerWithAddr(ctx1, "https://127.0.0.1:0/callback")
 	if err != nil {
 		t.Fatalf("failed to start first HTTPS server: %v", err)
 	}
@@ -96,8 +80,8 @@ func TestHTTPSCallbackServerContextCancel(t *testing.T) {
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 
-	// Starting server on same port should succeed now
-	_, err = StartHTTPSCallbackServer(ctx2, redirectURI)
+	// Starting server on same allocated port should succeed now that port is released
+	_, err = StartHTTPSCallbackServer(ctx2, fmt.Sprintf("https://%s/callback", addr))
 	if err != nil {
 		t.Fatalf("failed to start second HTTPS server on same port after cancel: %v", err)
 	}
@@ -120,7 +104,7 @@ func TestStartHTTPSCallbackServerSecurity(t *testing.T) {
 	}
 
 	// 3. HTML escaping test
-	resCh, err := StartHTTPSCallbackServer(ctx, "https://127.0.0.1:18445/callback")
+	resCh, addr, err := StartHTTPSCallbackServerWithAddr(ctx, "https://127.0.0.1:0/callback")
 	if err != nil {
 		t.Fatalf("failed to start server: %v", err)
 	}
@@ -130,7 +114,7 @@ func TestStartHTTPSCallbackServerSecurity(t *testing.T) {
 	}
 	client := &http.Client{Transport: tr, Timeout: 3 * time.Second}
 
-	resp, err := client.Get("https://127.0.0.1:18445/callback?error=%3Cscript%3Ealert(1)%3C/script%3E")
+	resp, err := client.Get(fmt.Sprintf("https://%s/callback?error=%%3Cscript%%3Ealert(1)%%3C/script%%3E", addr))
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}

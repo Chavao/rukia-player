@@ -74,18 +74,25 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 
 // StartHTTPSCallbackServer starts a background HTTPS server to capture the Spotify OAuth callback.
 func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-chan CallbackResult, error) {
+	ch, _, err := StartHTTPSCallbackServerWithAddr(ctx, redirectURLStr)
+	return ch, err
+}
+
+// StartHTTPSCallbackServerWithAddr starts a background HTTPS or HTTP server to capture the Spotify OAuth callback
+// and returns the result channel and the bound listener address (useful for dynamic port allocation with :0).
+func StartHTTPSCallbackServerWithAddr(ctx context.Context, redirectURLStr string) (<-chan CallbackResult, string, error) {
 	u, err := url.Parse(redirectURLStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid redirect URI: %w", err)
+		return nil, "", fmt.Errorf("invalid redirect URI: %w", err)
 	}
 
 	hostname := u.Hostname()
 	if hostname != "127.0.0.1" && hostname != "localhost" && hostname != "::1" {
-		return nil, fmt.Errorf("insecure redirect URI host: %s; must be localhost or 127.0.0.1", hostname)
+		return nil, "", fmt.Errorf("insecure redirect URI host: %s; must be localhost or 127.0.0.1", hostname)
 	}
 
 	if u.Scheme != "https" && u.Scheme != "http" {
-		return nil, fmt.Errorf("unsupported redirect URI scheme: %s; must be http or https", u.Scheme)
+		return nil, "", fmt.Errorf("unsupported redirect URI scheme: %s; must be http or https", u.Scheme)
 	}
 
 	hostPort := u.Host
@@ -101,7 +108,7 @@ func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-cha
 	if u.Scheme == "https" {
 		cert, err := GenerateSelfSignedCert()
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate TLS cert: %w", err)
+			return nil, "", fmt.Errorf("failed to generate TLS cert: %w", err)
 		}
 
 		tlsConfig := &tls.Config{
@@ -110,12 +117,12 @@ func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-cha
 
 		listener, err = tls.Listen("tcp", hostPort, tlsConfig)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
+			return nil, "", fmt.Errorf("failed to listen on %s: %w", hostPort, err)
 		}
 	} else {
 		listener, err = net.Listen("tcp", hostPort)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
+			return nil, "", fmt.Errorf("failed to listen on %s: %w", hostPort, err)
 		}
 	}
 
@@ -183,7 +190,7 @@ func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-cha
 		_ = listener.Close()
 	}()
 
-	return resultCh, nil
+	return resultCh, listener.Addr().String(), nil
 }
 
 func hasPort(host string) bool {

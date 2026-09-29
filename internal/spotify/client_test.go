@@ -20,7 +20,24 @@ func TestClientGetCurrentUser(t *testing.T) {
 	defer ts.Close()
 
 	// Direct client with customized URL for testing
-	c := &Client{httpClient: ts.Client()}
+	c := &Client{
+		httpClient: ts.Client(),
+		apiBase:    ts.URL,
+	}
+
+	user, err := c.GetCurrentUser(context.Background())
+	if err != nil {
+		t.Fatalf("GetCurrentUser failed: %v", err)
+	}
+	if user.ID != "diego" {
+		t.Errorf("expected user ID 'diego', got %s", user.ID)
+	}
+	if user.DisplayName != "Diego Chavão" {
+		t.Errorf("expected display name 'Diego Chavão', got %s", user.DisplayName)
+	}
+	if user.Product != "premium" {
+		t.Errorf("expected product 'premium', got %s", user.Product)
+	}
 
 	// Test checkError helper
 	resp, _ := ts.Client().Get(ts.URL + "/me")
@@ -36,12 +53,10 @@ func TestClientGetCurrentUser(t *testing.T) {
 	defer errTs.Close()
 
 	errResp, _ := errTs.Client().Get(errTs.URL)
-	err := checkError(errResp)
-	if err == nil || !strings.Contains(err.Error(), "Premium is required") {
-		t.Fatalf("expected premium required error, got %v", err)
+	checkErr := checkError(errResp)
+	if checkErr == nil || !strings.Contains(checkErr.Error(), "Premium is required") {
+		t.Fatalf("expected premium required error, got %v", checkErr)
 	}
-
-	_ = c
 }
 
 func TestGetPlaylistItemsEndpoint(t *testing.T) {
