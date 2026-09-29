@@ -1,4 +1,4 @@
-module rukia
+module github.com/Chavao/rukia-player
 
 go 1.27.1
 

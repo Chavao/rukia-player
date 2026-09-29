@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"rukia/internal/spotify"
+	"github.com/Chavao/rukia-player/internal/spotify"
 )
 
 func TestRenderHeader(t *testing.T) {

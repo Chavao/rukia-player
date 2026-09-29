@@ -5,7 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"rukia/internal/spotify"
+	"github.com/Chavao/rukia-player/internal/spotify"
 )
 
 func TestModelUpdateNavigationAndModal(t *testing.T) {

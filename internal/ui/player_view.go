@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"rukia/internal/spotify"
-	"rukia/internal/util"
+	"github.com/Chavao/rukia-player/internal/spotify"
+	"github.com/Chavao/rukia-player/internal/util"
 )
 
 // RenderHeader renders the top status bar matching Image 2.

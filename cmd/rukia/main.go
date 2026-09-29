@@ -8,10 +8,10 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"rukia/internal/auth"
-	"rukia/internal/player"
-	"rukia/internal/spotify"
-	"rukia/internal/ui"
+	"github.com/Chavao/rukia-player/internal/auth"
+	"github.com/Chavao/rukia-player/internal/player"
+	"github.com/Chavao/rukia-player/internal/spotify"
+	"github.com/Chavao/rukia-player/internal/ui"
 )
 
 const version = "1.0.0"
