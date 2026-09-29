@@ -14,6 +14,7 @@ import (
 )
 
 type tickMsg time.Time
+type pollMsg time.Time
 type playbackStateMsg *spotify.PlaybackState
 type playerErrorMsg error
 type errMsg error
@@ -85,10 +86,13 @@ func NewModel(
 	}
 }
 
+const defaultPollInterval = 4 * time.Second
+
 // Init sets up the progress tick and initial device/playlist sync.
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		tickCmd(),
+		pollCmd(defaultPollInterval),
 		m.pollPlaybackCmd(),
 		m.waitForPlayerErrorCmd(),
 	)
@@ -114,6 +118,12 @@ func (m *Model) waitForPlayerErrorCmd() tea.Cmd {
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+func pollCmd(interval time.Duration) tea.Cmd {
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
+		return pollMsg(t)
 	})
 }
 
@@ -149,7 +159,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		cmds = append(cmds, tickCmd(), m.pollPlaybackCmd())
+		cmds = append(cmds, tickCmd())
+
+	case pollMsg:
+		cmds = append(cmds, pollCmd(defaultPollInterval), m.pollPlaybackCmd())
 
 	case playbackStateMsg:
 		if msg != nil {

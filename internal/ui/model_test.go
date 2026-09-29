@@ -202,4 +202,16 @@ func TestWaitForPlayerErrorCmd(t *testing.T) {
 	}
 }
 
+func TestModelPollMsg(t *testing.T) {
+	model := NewModel(nil, nil, nil, nil, "dev-1")
+	m, cmd := model.Update(pollMsg(time.Now()))
+	if m == nil {
+		t.Fatal("expected non-nil model from Update")
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil tea.Cmd for pollMsg")
+	}
+}
+
+
 
