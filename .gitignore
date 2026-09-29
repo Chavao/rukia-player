@@ -1,0 +1,10 @@
+# Binaries
+/bin/
+/rukia
+
+# Environment and credentials
+.env
+*.local
+
+# System & OS
+.DS_Store
