@@ -78,3 +78,20 @@ func TestRenderBottomBar(t *testing.T) {
 		t.Errorf("bottom bar missing duration times: %s", bottom)
 	}
 }
+
+func TestRenderBottomBarWithError(t *testing.T) {
+	track := &spotify.Track{
+		Name:       "Alpha Waves",
+		Artist:     "Brain Study",
+		DurationMs: 180000,
+	}
+
+	bottom := RenderBottomBar(track, 60000, 100, true, "context", 80, "failed to change volume")
+	if !strings.Contains(bottom, "failed to change volume") {
+		t.Errorf("expected bottom bar to render error message, got: %s", bottom)
+	}
+	if !strings.Contains(bottom, "⚠") {
+		t.Errorf("expected bottom bar to contain warning icon, got: %s", bottom)
+	}
+}
+

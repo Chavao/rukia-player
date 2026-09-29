@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -129,4 +130,48 @@ type customErr string
 
 func (e customErr) Error() string { return string(e) }
 func assertErr(s string) error    { return customErr(s) }
+
+func TestModelActionResultMsgAndErrorDisplay(t *testing.T) {
+	tracks := []spotify.Track{
+		{ID: "t1", Name: "Track 1", DurationMs: 120000},
+	}
+	playlist := &spotify.Playlist{
+		Name:   "My Playlist",
+		Tracks: tracks,
+	}
+	model := NewModel(nil, nil, nil, playlist, "dev-1")
+
+	// Initially no error rendered in View
+	view := model.View()
+	if strings.Contains(view, "⚠") {
+		t.Error("view should not show error indicator initially")
+	}
+
+	// Receive actionResultMsg with error
+	m, cmd := model.Update(actionResultMsg{action: "change volume", err: assertErr("rate limited")})
+	model = m.(*Model)
+	if model.err == nil {
+		t.Fatal("expected model.err to be set")
+	}
+	if cmd == nil {
+		t.Fatal("expected clearErrorCmd to be scheduled")
+	}
+
+	// View should now display error in footer
+	view = model.View()
+	if !strings.Contains(view, "⚠") || !strings.Contains(view, "rate limited") {
+		t.Errorf("expected view to contain error message, got: %s", view)
+	}
+
+	// clearErrorMsg clears the error
+	m, _ = model.Update(clearErrorMsg{})
+	model = m.(*Model)
+	if model.err != nil {
+		t.Errorf("expected model.err to be nil after clearErrorMsg, got: %v", model.err)
+	}
+	view = model.View()
+	if strings.Contains(view, "⚠") {
+		t.Error("view should not show error indicator after clearErrorMsg")
+	}
+}
 

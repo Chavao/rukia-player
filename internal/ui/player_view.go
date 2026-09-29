@@ -119,7 +119,7 @@ func RenderTrackTable(tracks []spotify.Track, cursor int, playingIdx int, width 
 }
 
 // RenderBottomBar renders the player progress bar and metadata matching Image 2.
-func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, isPlaying bool, repeatMode string, width int) string {
+func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, isPlaying bool, repeatMode string, width int, errStr ...string) string {
 	if width <= 0 {
 		return ""
 	}
@@ -142,7 +142,7 @@ func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, is
 	barStyled := ProgressBarFilled.Render(bar)
 
 	// Line 2: Details
-	// Left: Track name
+	// Left: Error message if present, otherwise Track name
 	// Right: [R] 0:00 / 3:00 [100%]
 	repIcon := " "
 	if repeatMode != "off" && repeatMode != "" {
@@ -163,8 +163,15 @@ func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, is
 	if leftMaxW < 10 {
 		leftMaxW = 10
 	}
-	trackTitle = truncateString(trackTitle, leftMaxW)
-	leftStyled := BottomTrackStyle.Render(trackTitle)
+
+	var leftStyled string
+	if len(errStr) > 0 && errStr[0] != "" {
+		errDisplay := truncateString("⚠ "+errStr[0], leftMaxW)
+		leftStyled = BottomErrorStyle.Render(errDisplay)
+	} else {
+		trackTitle = truncateString(trackTitle, leftMaxW)
+		leftStyled = BottomTrackStyle.Render(trackTitle)
+	}
 
 	leftW := lipgloss.Width(leftStyled)
 	gapW := width - leftW - rightW

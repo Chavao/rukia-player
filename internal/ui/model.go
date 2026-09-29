@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -19,6 +20,17 @@ type errMsg error
 type playbackChangedMsg struct {
 	playing bool
 	err     error
+}
+type actionResultMsg struct {
+	action string
+	err    error
+}
+type clearErrorMsg struct{}
+
+func clearErrorCmd(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg {
+		return clearErrorMsg{}
+	})
 }
 
 // Model is the main Bubble Tea application model.
@@ -163,11 +175,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.isPlaying = msg.playing
 		} else {
-			m.err = msg.err
+			m.err = fmt.Errorf("failed to toggle playback: %w", msg.err)
+			cmds = append(cmds, clearErrorCmd(3*time.Second))
+		}
+
+	case actionResultMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("failed to %s: %w", msg.action, msg.err)
+			cmds = append(cmds, clearErrorCmd(3*time.Second))
 		}
 
 	case errMsg:
 		m.err = msg
+		cmds = append(cmds, clearErrorCmd(3*time.Second))
+
+	case clearErrorMsg:
+		m.err = nil
 
 	case tea.KeyMsg:
 		// When exit modal is displayed, route keys exclusively to modal
@@ -297,10 +320,11 @@ func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 		if engine != nil {
 			engine.Resume()
 		}
+		var err error
 		if client != nil && uri != "" {
-			_ = client.PlayPlaylist(ctx, deviceID, uri, idx)
+			err = client.PlayPlaylist(ctx, deviceID, uri, idx)
 		}
-		return nil
+		return actionResultMsg{action: "play track", err: err}
 	}
 }
 
@@ -314,10 +338,11 @@ func (m *Model) setVolumeCmd(vol int) tea.Cmd {
 		if engine != nil {
 			engine.SetVolume(vol)
 		}
+		var err error
 		if client != nil {
-			_ = client.SetVolume(ctx, deviceID, vol)
+			err = client.SetVolume(ctx, deviceID, vol)
 		}
-		return nil
+		return actionResultMsg{action: "change volume", err: err}
 	}
 }
 
@@ -327,10 +352,11 @@ func (m *Model) syncSpotifyVolumeCmd(vol int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
+		var err error
 		if client != nil {
-			_ = client.SetVolume(ctx, deviceID, vol)
+			err = client.SetVolume(ctx, deviceID, vol)
 		}
-		return nil
+		return actionResultMsg{action: "sync volume", err: err}
 	}
 }
 
@@ -340,10 +366,11 @@ func (m *Model) setShuffleCmd(shuf bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
+		var err error
 		if client != nil {
-			_ = client.SetShuffle(ctx, deviceID, shuf)
+			err = client.SetShuffle(ctx, deviceID, shuf)
 		}
-		return nil
+		return actionResultMsg{action: "toggle shuffle", err: err}
 	}
 }
 
@@ -353,10 +380,11 @@ func (m *Model) setRepeatCmd(mode string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
+		var err error
 		if client != nil {
-			_ = client.SetRepeat(ctx, deviceID, mode)
+			err = client.SetRepeat(ctx, deviceID, mode)
 		}
-		return nil
+		return actionResultMsg{action: "toggle repeat", err: err}
 	}
 }
 
@@ -391,7 +419,11 @@ func (m *Model) View() string {
 	}
 
 	// 4. Bottom bar
-	bottom := RenderBottomBar(curTrack, m.progressMs, m.volume, m.isPlaying, m.repeatMode, m.width)
+	errStr := ""
+	if m.err != nil {
+		errStr = m.err.Error()
+	}
+	bottom := RenderBottomBar(curTrack, m.progressMs, m.volume, m.isPlaying, m.repeatMode, m.width, errStr)
 
 	baseView := lipgloss.JoinVertical(
 		lipgloss.Left,
