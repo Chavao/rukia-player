@@ -55,15 +55,20 @@ func (s *FileStateStore) Load() (*librespot.AppState, error) {
 	hasher.Write([]byte("rukia-player-device-" + s.cacheDir))
 	state.DeviceId = hex.EncodeToString(hasher.Sum(nil))
 
-	// Search for credentials in rukia cache, then ncspot cache
+	// Search for credentials in rukia cache, then fallback candidates.
 	candidatePaths := []string{
 		filepath.Join(s.cacheDir, "credentials.json"),
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidatePaths = append(candidatePaths,
-			filepath.Join(home, ".cache", "rukia", "librespot", "credentials.json"),
-			filepath.Join(home, ".cache", "ncspot", "librespot", "credentials.json"),
-		)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		rukiaCache := filepath.Join(home, ".cache", "rukia", "librespot", "credentials.json")
+		if filepath.Clean(rukiaCache) != filepath.Clean(filepath.Join(s.cacheDir, "credentials.json")) {
+			candidatePaths = append(candidatePaths, rukiaCache)
+		}
+		// NOTE: External client cache migration fallback.
+		// Rukia checks ncspot's cache (~/.cache/ncspot/librespot/credentials.json)
+		// as a fallback to allow users transitioning from ncspot to reuse credentials.
+		ncspotCache := filepath.Join(home, ".cache", "ncspot", "librespot", "credentials.json")
+		candidatePaths = append(candidatePaths, ncspotCache)
 	}
 
 	for _, p := range candidatePaths {
@@ -201,8 +206,7 @@ func (e *Engine) Start(parentCtx context.Context, username, accessToken string) 
 	_ = os.Setenv("PULSE_PROP_media.role", "music")
 	_ = os.Setenv("PULSE_PROP_media.name", DefaultMediaName)
 
-	home, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(home, ".cache", "rukia", "librespot")
+	cacheDir := defaultCacheDir()
 
 	dCfg := &daemon.Config{
 		DeviceName:      e.deviceName,
@@ -304,4 +308,20 @@ func (e *Engine) Close() error {
 	}
 
 	return nil
+}
+
+// defaultCacheDir resolves the directory for librespot daemon state and cache.
+// It prioritizes XDG_CACHE_HOME, then os.UserCacheDir, then os.UserHomeDir,
+// and gracefully falls back to os.TempDir if discovery fails.
+func defaultCacheDir() string {
+	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "rukia", "librespot")
+	}
+	if cache, err := os.UserCacheDir(); err == nil && cache != "" {
+		return filepath.Join(cache, "rukia", "librespot")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".cache", "rukia", "librespot")
+	}
+	return filepath.Join(os.TempDir(), "rukia", "librespot")
 }

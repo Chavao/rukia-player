@@ -40,6 +40,11 @@ func ParsePlaylistID(rawInput string) (string, error) {
 			return "", fmt.Errorf("invalid URL: %w", err)
 		}
 
+		host := strings.ToLower(u.Hostname())
+		if host != "open.spotify.com" {
+			return "", fmt.Errorf("invalid Spotify URL hostname %q: expected open.spotify.com", host)
+		}
+
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 		for i, part := range parts {
 			if part == "playlist" && i+1 < len(parts) {

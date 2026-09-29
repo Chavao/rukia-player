@@ -3,6 +3,7 @@ package player
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -122,4 +123,21 @@ func TestFileStateStore(t *testing.T) {
 		t.Errorf("expected blob 'test-data-blob', got %s", string(reloadedState.Credentials.Data))
 	}
 }
+
+func TestDefaultCacheDir(t *testing.T) {
+	tempCache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tempCache)
+
+	dir := defaultCacheDir()
+	if !strings.HasPrefix(dir, tempCache) {
+		t.Errorf("expected cacheDir to use XDG_CACHE_HOME %s, got %s", tempCache, dir)
+	}
+
+	t.Setenv("XDG_CACHE_HOME", "")
+	dirFallback := defaultCacheDir()
+	if dirFallback == "" {
+		t.Fatal("expected non-empty fallback cache dir")
+	}
+}
+
 
