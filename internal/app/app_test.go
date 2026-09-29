@@ -52,11 +52,12 @@ func TestRunHelpAndVersion(t *testing.T) {
 }
 
 func TestDiscoverDeviceRespectsBudget(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
 	client := deviceListerFunc(func(ctx context.Context) ([]spotify.Device, error) {
 		calls++
+		cancel()
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
