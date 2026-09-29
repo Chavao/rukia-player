@@ -129,7 +129,7 @@ func RenderTrackTable(tracks []spotify.Track, cursor int, playingIdx int, width 
 }
 
 // RenderBottomBar renders the player progress bar and metadata matching Image 2.
-func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, isPlaying bool, repeatMode string, width int, errStr ...string) string {
+func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, isPlaying bool, shuffle bool, repeatMode string, width int, errStr ...string) string {
 	if width <= 0 {
 		return ""
 	}
@@ -153,14 +153,24 @@ func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, is
 
 	// Line 2: Details
 	// Left: Error message if present, otherwise Track name
-	// Right: [R] 0:00 / 3:00 [100%]
+	// Right: [S][R] ▶ 0:00 / 3:00 [100%]
 	repIcon := " "
 	if repeatMode != "off" && repeatMode != "" {
 		repIcon = "R"
 	}
+	shufIcon := " "
+	if shuffle {
+		shufIcon = "S"
+	}
+	playIcon := "⏸"
+	if isPlaying {
+		playIcon = "▶"
+	}
 
-	statusRight := fmt.Sprintf("[%s] %s / %s [%d%%]",
+	statusRight := fmt.Sprintf("[%s] [%s] %s %s / %s [%d%%]",
+		shufIcon,
 		repIcon,
+		playIcon,
 		util.FormatDuration(progressMs),
 		util.FormatDuration(totalMs),
 		volume,

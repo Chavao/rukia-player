@@ -186,7 +186,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 			return nil, fmt.Errorf("failed to fetch tracks page: %w", err)
 		}
 
-		if tResp.StatusCode == http.StatusNotFound || tResp.StatusCode == http.StatusForbidden {
+		if tResp.StatusCode == http.StatusNotFound {
 			tResp.Body.Close()
 			// Fallback to legacy /tracks endpoint
 			legacyEndpoint := fmt.Sprintf("%s/playlists/%s/tracks?limit=%d&offset=%d", c.endpointBase(), playlistID, limit, offset)

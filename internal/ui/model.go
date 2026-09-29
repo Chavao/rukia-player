@@ -43,6 +43,7 @@ type Model struct {
 	playlist      *spotify.Playlist
 	deviceID      string
 	appCfg        *auth.Config
+	trackIndex    map[string]int
 
 	cursor     int
 	playingIdx int
@@ -76,6 +77,14 @@ func NewModel(
 		cfg = appCfg[0]
 		vol = cfg.Volume
 	}
+
+	idxMap := make(map[string]int)
+	if playlist != nil {
+		for i, t := range playlist.Tracks {
+			idxMap[t.ID] = i
+		}
+	}
+
 	return &Model{
 		spotifyClient: spotifyClient,
 		playerEngine:  playerEngine,
@@ -83,6 +92,7 @@ func NewModel(
 		playlist:      playlist,
 		deviceID:      deviceID,
 		appCfg:        cfg,
+		trackIndex:    idxMap,
 		cursor:        0,
 		playingIdx:    0,
 		isPlaying:     true,
@@ -183,12 +193,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Device != nil {
 				m.volume = msg.Device.VolumePercent
 			}
-			if msg.Item != nil && m.playlist != nil {
-				for i, t := range m.playlist.Tracks {
-					if t.ID == msg.Item.ID {
-						m.playingIdx = i
-						break
-					}
+			if msg.Item != nil && m.trackIndex != nil {
+				if idx, ok := m.trackIndex[msg.Item.ID]; ok {
+					m.playingIdx = idx
 				}
 			}
 		}
@@ -432,7 +439,7 @@ func (m *Model) View() string {
 	if m.err != nil {
 		errStr = m.err.Error()
 	}
-	bottom := RenderBottomBar(curTrack, m.progressMs, m.volume, m.isPlaying, m.repeatMode, m.width, errStr)
+	bottom := RenderBottomBar(curTrack, m.progressMs, m.volume, m.isPlaying, m.shuffle, m.repeatMode, m.width, errStr)
 
 	baseView := lipgloss.JoinVertical(
 		lipgloss.Left,

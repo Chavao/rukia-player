@@ -64,18 +64,33 @@ func TestRenderBottomBar(t *testing.T) {
 		DurationMs: 180000,
 	}
 
-	bottom := RenderBottomBar(track, 60000, 100, true, "context", 80)
+	bottom := RenderBottomBar(track, 60000, 100, true, true, "context", 80)
 	if !strings.Contains(bottom, "Brain Study - Alpha Waves") {
 		t.Errorf("bottom bar missing track name: %s", bottom)
 	}
+	if !strings.Contains(bottom, "[S]") {
+		t.Errorf("bottom bar missing shuffle indicator: %s", bottom)
+	}
 	if !strings.Contains(bottom, "[R]") {
 		t.Errorf("bottom bar missing repeat indicator: %s", bottom)
+	}
+	if !strings.Contains(bottom, "▶") {
+		t.Errorf("bottom bar missing play indicator: %s", bottom)
 	}
 	if !strings.Contains(bottom, "[100%]") {
 		t.Errorf("bottom bar missing volume percentage: %s", bottom)
 	}
 	if !strings.Contains(bottom, "1:00 / 3:00") {
 		t.Errorf("bottom bar missing duration times: %s", bottom)
+	}
+
+	// Paused and no shuffle
+	bottomPaused := RenderBottomBar(track, 60000, 100, false, false, "off", 80)
+	if !strings.Contains(bottomPaused, "⏸") {
+		t.Errorf("bottom bar missing pause indicator when stopped: %s", bottomPaused)
+	}
+	if strings.Contains(bottomPaused, "[S]") {
+		t.Errorf("bottom bar should not display active shuffle indicator: %s", bottomPaused)
 	}
 }
 
@@ -86,7 +101,7 @@ func TestRenderBottomBarWithError(t *testing.T) {
 		DurationMs: 180000,
 	}
 
-	bottom := RenderBottomBar(track, 60000, 100, true, "context", 80, "failed to change volume")
+	bottom := RenderBottomBar(track, 60000, 100, true, false, "context", 80, "failed to change volume")
 	if !strings.Contains(bottom, "failed to change volume") {
 		t.Errorf("expected bottom bar to render error message, got: %s", bottom)
 	}

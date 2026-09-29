@@ -239,6 +239,35 @@ func TestModelVolumePersistence(t *testing.T) {
 	}
 }
 
+func TestModelTrackIndexLookup(t *testing.T) {
+	tracks := []spotify.Track{
+		{ID: "track-a", Name: "Alpha", DurationMs: 120000},
+		{ID: "track-b", Name: "Beta", DurationMs: 180000},
+		{ID: "track-c", Name: "Gamma", DurationMs: 200000},
+	}
+	playlist := &spotify.Playlist{
+		ID:     "pl-1",
+		Tracks: tracks,
+	}
 
+	model := NewModel(nil, nil, nil, playlist, "dev-1")
+	if len(model.trackIndex) != 3 {
+		t.Fatalf("expected trackIndex length 3, got %d", len(model.trackIndex))
+	}
+	if model.trackIndex["track-b"] != 1 {
+		t.Errorf("expected track-b at index 1, got %d", model.trackIndex["track-b"])
+	}
 
+	// Dispatch playbackStateMsg for track-c
+	state := &spotify.PlaybackState{
+		IsPlaying:  true,
+		ProgressMs: 50000,
+		Item:       &spotify.Track{ID: "track-c"},
+	}
+	m, _ := model.Update(playbackStateMsg(state))
+	updated := m.(*Model)
 
+	if updated.playingIdx != 2 {
+		t.Errorf("expected playingIdx to be 2 for track-c, got %d", updated.playingIdx)
+	}
+}
