@@ -63,6 +63,15 @@ func GetConfigPath() (string, error) {
 	return filepath.Join(dir, configFileName), nil
 }
 
+type configDTO struct {
+	ClientID     string        `json:"client_id"`
+	ClientSecret string        `json:"client_secret"`
+	RedirectURI  string        `json:"redirect_uri"`
+	Token        *oauth2.Token `json:"token,omitempty"`
+	LastPlaylist string        `json:"last_playlist,omitempty"`
+	Volume       *int          `json:"volume"`
+}
+
 // LoadConfig loads configuration from ~/.config/rukia/config.json, applying environment overrides.
 func LoadConfig() (*Config, error) {
 	cfg := DefaultConfig()
@@ -82,14 +91,30 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file %s: %w", path, err)
 	}
 
-	if err := json.Unmarshal(data, cfg); err != nil {
+	var dto configDTO
+	if err := json.Unmarshal(data, &dto); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 	}
+
+	cfg.ClientID = dto.ClientID
+	cfg.ClientSecret = dto.ClientSecret
+	cfg.RedirectURI = dto.RedirectURI
+	cfg.Token = dto.Token
+	cfg.LastPlaylist = dto.LastPlaylist
 
 	if cfg.RedirectURI == "" {
 		cfg.RedirectURI = DefaultRedirectURI
 	}
-	if cfg.Volume <= 0 {
+
+	if dto.Volume != nil {
+		vol := *dto.Volume
+		if vol < 0 {
+			vol = 0
+		} else if vol > 100 {
+			vol = 100
+		}
+		cfg.Volume = vol
+	} else {
 		cfg.Volume = DefaultVolume
 	}
 

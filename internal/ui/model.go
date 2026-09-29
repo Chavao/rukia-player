@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/Chavao/rukia-player/internal/auth"
 	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
 )
@@ -41,6 +42,7 @@ type Model struct {
 	user          *spotify.UserProfile
 	playlist      *spotify.Playlist
 	deviceID      string
+	appCfg        *auth.Config
 
 	cursor     int
 	playingIdx int
@@ -66,18 +68,26 @@ func NewModel(
 	user *spotify.UserProfile,
 	playlist *spotify.Playlist,
 	deviceID string,
+	appCfg ...*auth.Config,
 ) *Model {
+	vol := 100
+	var cfg *auth.Config
+	if len(appCfg) > 0 && appCfg[0] != nil {
+		cfg = appCfg[0]
+		vol = cfg.Volume
+	}
 	return &Model{
 		spotifyClient: spotifyClient,
 		playerEngine:  playerEngine,
 		user:          user,
 		playlist:      playlist,
 		deviceID:      deviceID,
+		appCfg:        cfg,
 		cursor:        0,
 		playingIdx:    0,
 		isPlaying:     true,
 		progressMs:    0,
-		volume:        100,
+		volume:        vol,
 		repeatMode:    "off",
 		exitDialog:    NewExitDialog(),
 		keys:          DefaultKeyMap(),
@@ -216,6 +226,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.exitDialog.Next()
 			case key.Matches(msg, m.keys.Enter):
 				if m.exitDialog.Selected == ExitOptionYes {
+					if m.appCfg != nil {
+						m.appCfg.Volume = m.volume
+						_ = m.appCfg.Save()
+					}
 					if m.playerEngine != nil {
 						_ = m.playerEngine.Close()
 					}
@@ -264,6 +278,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume > 100 {
 					m.volume = 100
 				}
+				if m.appCfg != nil {
+					m.appCfg.Volume = m.volume
+					_ = m.appCfg.Save()
+				}
 				cmds = append(cmds, m.setVolumeCmd(m.volume))
 			}
 
@@ -272,6 +290,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.volume -= 5
 				if m.volume < 0 {
 					m.volume = 0
+				}
+				if m.appCfg != nil {
+					m.appCfg.Volume = m.volume
+					_ = m.appCfg.Save()
 				}
 				cmds = append(cmds, m.setVolumeCmd(m.volume))
 			}

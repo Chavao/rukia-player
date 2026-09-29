@@ -86,3 +86,24 @@ func TestConfigEnvOverrides(t *testing.T) {
 		t.Error("expected HasCredentials to be true with env overrides")
 	}
 }
+
+func TestConfigZeroVolumeMute(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tempDir)
+
+	cfg := DefaultConfig()
+	cfg.Volume = 0
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("failed to save config: %v", err)
+	}
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if loaded.Volume != 0 {
+		t.Errorf("expected volume 0 (mute) to be preserved, got %d", loaded.Volume)
+	}
+}
+

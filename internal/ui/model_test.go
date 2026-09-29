@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/Chavao/rukia-player/internal/auth"
 	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
 )
@@ -212,6 +213,32 @@ func TestModelPollMsg(t *testing.T) {
 		t.Fatal("expected non-nil tea.Cmd for pollMsg")
 	}
 }
+
+func TestModelVolumePersistence(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tempDir)
+
+	cfg := auth.DefaultConfig()
+	cfg.Volume = 0 // Mute
+	model := NewModel(nil, nil, nil, nil, "dev-1", cfg)
+
+	if model.volume != 0 {
+		t.Errorf("expected model initial volume 0, got %d", model.volume)
+	}
+
+	// Press VolumeUp (+)
+	volUpMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	m, _ := model.Update(volUpMsg)
+	model = m.(*Model)
+
+	if model.volume != 5 {
+		t.Errorf("expected volume 5 after VolumeUp, got %d", model.volume)
+	}
+	if cfg.Volume != 5 {
+		t.Errorf("expected cfg.Volume to be updated to 5, got %d", cfg.Volume)
+	}
+}
+
 
 
 

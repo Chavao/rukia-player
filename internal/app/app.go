@@ -126,7 +126,7 @@ func Run(ctx context.Context, args []string) error {
 
 	// 6. Start PulseAudio audio sink
 	playerEngine := player.NewEngine("rukia")
-	if cfg.Volume > 0 {
+	if cfg.Volume >= 0 {
 		playerEngine.SetVolume(cfg.Volume)
 	}
 	if err := playerEngine.Start(ctx, user.ID, cfg.Token.AccessToken); err != nil {
@@ -187,7 +187,7 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	// 10. Start Bubble Tea TUI
-	model := ui.NewModel(spotifyClient, playerEngine, user, playlist, targetDeviceID)
+	model := ui.NewModel(spotifyClient, playerEngine, user, playlist, targetDeviceID, cfg)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
