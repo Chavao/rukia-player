@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/Chavao/rukia-player/internal/spotify"
 	"github.com/Chavao/rukia-player/internal/util"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // RenderHeader renders the top status bar matching Image 2.

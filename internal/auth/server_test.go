@@ -131,5 +131,3 @@ func TestStartHTTPSCallbackServerSecurity(t *testing.T) {
 	// Drain result channel
 	<-resCh
 }
-
-

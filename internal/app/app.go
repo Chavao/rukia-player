@@ -10,11 +10,11 @@ import (
 	"os"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Chavao/rukia-player/internal/auth"
 	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
 	"github.com/Chavao/rukia-player/internal/ui"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 var Version = "1.0.0"

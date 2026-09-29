@@ -139,5 +139,3 @@ func TestDefaultCacheDir(t *testing.T) {
 		t.Fatal("expected non-empty fallback cache dir")
 	}
 }
-
-

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/Chavao/rukia-player/internal/auth"
 	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type tickMsg time.Time

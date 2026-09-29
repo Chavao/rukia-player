@@ -135,5 +135,3 @@ func TestConfigSaveEnforcesChmodExistingFile(t *testing.T) {
 		t.Errorf("expected mode 0600 after Save on existing 0644 file, got %v", fi.Mode().Perm())
 	}
 }
-
-

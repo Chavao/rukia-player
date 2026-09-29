@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Chavao/rukia-player/internal/auth"
 	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestModelUpdateNavigationAndModal(t *testing.T) {
@@ -402,4 +402,3 @@ func TestModelExtremeTerminalDimensions(t *testing.T) {
 		}
 	}
 }
-

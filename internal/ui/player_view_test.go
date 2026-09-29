@@ -125,5 +125,3 @@ func TestRenderHeaderWidths(t *testing.T) {
 		}
 	}
 }
-
-

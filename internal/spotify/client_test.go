@@ -225,4 +225,3 @@ func TestClientGetWithTransient503(t *testing.T) {
 		t.Errorf("expected 2 attempts, got %d", attempts)
 	}
 }
-
