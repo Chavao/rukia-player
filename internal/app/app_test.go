@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -75,5 +76,34 @@ func TestDiscoverDeviceKeepsActiveFallback(t *testing.T) {
 	})
 	if got := discoverDevice(context.Background(), client, "rukia", 2, 0); got != "active" {
 		t.Fatalf("expected active fallback, got %q", got)
+	}
+}
+func TestDiscoverDeviceUsesLatestSuccessfulFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		second    []spotify.Device
+		secondErr error
+		want      string
+	}{
+		{"active device changed", []spotify.Device{{ID: "tablet", IsActive: true}}, nil, "tablet"},
+		{"devices disappeared", nil, nil, ""},
+		{"discovery failed", nil, errors.New("unavailable"), "phone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := deviceListerFunc(func(context.Context) ([]spotify.Device, error) {
+				calls++
+				if calls == 1 {
+					return []spotify.Device{{ID: "phone", IsActive: true}}, nil
+				}
+				return tc.second, tc.secondErr
+			})
+			if got := discoverDevice(context.Background(), client, "rukia", 2, 0); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+			if calls != 2 {
+				t.Fatalf("got %d calls, want 2", calls)
+			}
+		})
 	}
 }

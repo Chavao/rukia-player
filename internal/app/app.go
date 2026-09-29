@@ -181,6 +181,7 @@ func discoverDevice(ctx context.Context, client deviceLister, name string, maxAt
 				}
 			}
 			// Remember an active device in case the local receiver never appears.
+			fallback = ""
 			if len(devices) > 0 {
 				fallback = devices[0].ID
 				for _, d := range devices {
