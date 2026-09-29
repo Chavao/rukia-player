@@ -138,7 +138,9 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	// Persist last played playlist
-	_ = cfg.SetLastPlaylist(playlistID)
+	if err := cfg.SetLastPlaylist(playlistID); err != nil {
+		return fmt.Errorf("failed to save last playlist: %w", err)
+	}
 
 	// 8. Find target device (rukia or active device)
 	deviceCtx, cancelDeviceDiscovery := context.WithTimeout(ctx, 5*time.Second)
