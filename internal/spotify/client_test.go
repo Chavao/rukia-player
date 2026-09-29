@@ -2,9 +2,11 @@ package spotify
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -225,6 +227,147 @@ func TestClientGetWithRetryAfter429(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestClientGetRespectsValidRetryAfter(t *testing.T) {
+	var attempts atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Write([]byte(`{"id":"user"}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	start := time.Now()
+	if _, err := c.GetCurrentUser(context.Background()); err != nil {
+		t.Fatalf("GetCurrentUser failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Errorf("retried before Retry-After elapsed: %v", elapsed)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Errorf("expected 2 requests, got %d", got)
+	}
+}
+
+func TestClientGetRetryAfterExceedsContextDeadline(t *testing.T) {
+	var attempts atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	_, err := c.GetCurrentUser(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline exceeded, got %v", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("expected 1 request, got %d", got)
+	}
+}
+
+func TestClientGetCancellationDuringRetryAfter(t *testing.T) {
+	var attempts atomic.Int32
+	responded := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+			close(responded)
+			return
+		}
+		w.Write([]byte(`{"id":"user"}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := c.GetCurrentUser(ctx)
+		result <- err
+	}()
+	<-responded
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("expected 1 request, got %d", got)
+	}
+}
+
+func TestClientGetInvalidRetryAfterUsesFallback(t *testing.T) {
+	var attempts atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.Header().Set("Retry-After", "invalid")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Write([]byte(`{"id":"user"}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	start := time.Now()
+	if _, err := c.GetCurrentUser(context.Background()); err != nil {
+		t.Fatalf("GetCurrentUser failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
+		t.Errorf("retried before fallback backoff elapsed: %v", elapsed)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Errorf("expected 2 requests, got %d", got)
+	}
+}
+
+func TestClientGetFinal429IsAPIError(t *testing.T) {
+	var attempts atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"error":{"status":429,"message":"rate limit"}}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	_, err := c.GetCurrentUser(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 APIError, got %v", err)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("expected 3 requests, got %d", got)
+	}
+}
+
+func TestClientDoesNotRetryMutatingRequest(t *testing.T) {
+	var attempts atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	var apiErr *APIError
+	if err := c.Pause(context.Background(), "device"); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 APIError, got %v", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("expected 1 request, got %d", got)
 	}
 }
 

@@ -544,15 +544,12 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 		if resp.StatusCode == http.StatusTooManyRequests {
 			var retryAfter time.Duration
 			if h := resp.Header.Get("Retry-After"); h != "" {
-				if sec, parseErr := strconv.Atoi(h); parseErr == nil && sec > 0 {
+				if sec, parseErr := strconv.ParseInt(h, 10, 64); parseErr == nil && sec > 0 && sec <= (1<<63-1)/int64(time.Second) {
 					retryAfter = time.Duration(sec) * time.Second
 				}
 			}
 			if retryAfter == 0 {
 				retryAfter = time.Duration(200*(1<<attempt)) * time.Millisecond
-			}
-			if retryAfter > 10*time.Second {
-				retryAfter = 10 * time.Second
 			}
 
 			if attempt == maxAttempts-1 {
@@ -560,10 +557,12 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 			}
 
 			resp.Body.Close()
+			timer := time.NewTimer(retryAfter)
 			select {
-			case <-time.After(retryAfter):
+			case <-timer.C:
 				continue
 			case <-req.Context().Done():
+				timer.Stop()
 				return nil, req.Context().Err()
 			}
 		}
