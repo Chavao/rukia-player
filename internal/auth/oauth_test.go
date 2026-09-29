@@ -51,3 +51,16 @@ func TestGetAuthURL(t *testing.T) {
 		t.Errorf("expected response_type 'code', got %s", q.Get("response_type"))
 	}
 }
+
+func TestPromptCredentialsIfMissingAlreadySet(t *testing.T) {
+	cfg := &Config{
+		ClientID:     "already_set_id",
+		ClientSecret: "already_set_secret",
+	}
+
+	err := PromptCredentialsIfMissing(cfg)
+	if err != nil {
+		t.Fatalf("expected nil error when credentials already set, got: %v", err)
+	}
+}
+

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/spotify"
 )
@@ -206,9 +207,20 @@ func PromptCredentialsIfMissing(cfg *Config) error {
 	cfg.ClientID = strings.TrimSpace(clientID)
 
 	fmt.Print("Enter Spotify Client Secret: ")
-	clientSecret, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read client secret: %w", err)
+	var clientSecret string
+	if term.IsTerminal(os.Stdin.Fd()) {
+		byteSecret, err := term.ReadPassword(os.Stdin.Fd())
+		fmt.Println()
+		if err != nil {
+			return fmt.Errorf("failed to read client secret: %w", err)
+		}
+		clientSecret = string(byteSecret)
+	} else {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read client secret: %w", err)
+		}
+		clientSecret = line
 	}
 	cfg.ClientSecret = strings.TrimSpace(clientSecret)
 
