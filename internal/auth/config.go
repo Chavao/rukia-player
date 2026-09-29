@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	DefaultRedirectURI = "https://127.0.0.1:8443/callback"
+	DefaultRedirectURI = "http://127.0.0.1:8443/callback"
 	DefaultVolume      = 100
 	configDirName      = "rukia"
 	configFileName     = "config.json"
@@ -22,7 +22,8 @@ const (
 type Config struct {
 	mu           sync.Mutex
 	ClientID     string        `json:"client_id"`
-	ClientSecret string        `json:"client_secret"`
+	ClientSecret string        `json:"client_secret,omitempty"`
+	AuthFlow     string        `json:"auth_flow,omitempty"`
 	RedirectURI  string        `json:"redirect_uri"`
 	Token        *oauth2.Token `json:"token,omitempty"`
 	LastPlaylist string        `json:"last_playlist,omitempty"`
@@ -67,7 +68,8 @@ func GetConfigPath() (string, error) {
 
 type configDTO struct {
 	ClientID     string        `json:"client_id"`
-	ClientSecret string        `json:"client_secret"`
+	ClientSecret string        `json:"client_secret,omitempty"`
+	AuthFlow     string        `json:"auth_flow,omitempty"`
 	RedirectURI  string        `json:"redirect_uri"`
 	Token        *oauth2.Token `json:"token,omitempty"`
 	LastPlaylist string        `json:"last_playlist,omitempty"`
@@ -100,6 +102,7 @@ func LoadConfig() (*Config, error) {
 
 	cfg.ClientID = dto.ClientID
 	cfg.ClientSecret = dto.ClientSecret
+	cfg.AuthFlow = dto.AuthFlow
 	cfg.RedirectURI = dto.RedirectURI
 	cfg.Token = dto.Token
 	cfg.LastPlaylist = dto.LastPlaylist
@@ -154,6 +157,16 @@ func (c *Config) SetToken(token *oauth2.Token) error {
 	return c.saveLocked()
 }
 
+// SetPKCEToken records a new PKCE token and its refresh method together.
+func (c *Config) SetPKCEToken(token *oauth2.Token) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Token = token
+	c.AuthFlow = "pkce"
+	c.ClientSecret = ""
+	return c.saveLocked()
+}
+
 // CurrentToken returns the latest OAuth token.
 func (c *Config) CurrentToken() *oauth2.Token {
 	c.mu.Lock()
@@ -199,9 +212,9 @@ func (c *Config) saveLocked() error {
 	return nil
 }
 
-// HasCredentials returns true if ClientID and ClientSecret are set.
+// HasCredentials returns true when the public Spotify Client ID is set.
 func (c *Config) HasCredentials() bool {
-	return c.ClientID != "" && c.ClientSecret != ""
+	return c.ClientID != ""
 }
 
 func applyEnvOverrides(cfg *Config) {

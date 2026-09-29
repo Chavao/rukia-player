@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -8,6 +9,44 @@ import (
 
 	"golang.org/x/oauth2"
 )
+
+func TestPKCETokenRemovesStoredClientSecret(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := DefaultConfig()
+	cfg.ClientID = "client-id"
+	cfg.ClientSecret = "old-secret"
+	if err := cfg.SetPKCEToken(&oauth2.Token{AccessToken: "pkce-access"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AuthFlow != "pkce" || loaded.ClientSecret != "" || loaded.Token.AccessToken != "pkce-access" {
+		t.Fatalf("PKCE migration failed: flow=%q secret=%q token=%v", loaded.AuthFlow, loaded.ClientSecret, loaded.Token)
+	}
+	path, err := GetConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]json.RawMessage
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := saved["client_secret"]; ok {
+		t.Fatal("PKCE config still stores client secret")
+	}
+}
+
+func TestClientIDIsSufficientForSetup(t *testing.T) {
+	if !(&Config{ClientID: "client-id"}).HasCredentials() {
+		t.Fatal("PKCE setup should require only the Client ID")
+	}
+}
 
 func TestConfigLoadAndSave(t *testing.T) {
 	tempDir := t.TempDir()

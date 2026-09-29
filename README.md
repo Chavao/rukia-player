@@ -7,8 +7,8 @@ The application compiles to the command-line binary `rukia` and starts playing a
 ## Features
 
 - **Native Terminal Playback**: Embeds a Spotify Connect receiver using `go-librespot` with PulseAudio/PipeWire audio output.
-- **Spotify Web API Integration**: Full OAuth 2.0 authorization code flow with automatic token refresh, structured error parsing, and 429/5xx backoff retries.
-- **Hardened OAuth Callback Server**: Loopback-restricted HTTPS callback handler with ephemeral in-memory TLS certificate and masked terminal credentials entry.
+- **Spotify Web API Integration**: OAuth 2.0 authorization code flow with PKCE, automatic token refresh, structured error parsing, and 429/5xx backoff retries.
+- **OAuth Callback Server**: Loopback-restricted callback handler with explicit listener shutdown. Existing HTTPS configurations continue to use an ephemeral in-memory TLS certificate.
 - **Flexible Playlist Arguments**: Supports raw playlist IDs, IDs with query parameters, full Spotify URLs (`open.spotify.com`), and Spotify URIs.
 - **Cyan TUI Theme**: Designed to match the Spotify CLI theme with header stats, track listing (Artist - Album, Title, Duration), shuffle/repeat badges, and bottom progress bar with transient error notices.
 - **Exit Confirmation Dialog**: Modal dialog (`Ctrl+q`, `q`, `Ctrl+c`) with `<No>` and `<Yes>` confirmation buttons.
@@ -18,7 +18,7 @@ The application compiles to the command-line binary `rukia` and starts playing a
 1. **Spotify Premium Account**: Required by Spotify for playback control and streaming.
 2. **Spotify Developer Application**:
    - Register an application at [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
-   - Set **Redirect URI** to: `https://127.0.0.1:8443/callback` (or your configured port).
+   - Set **Redirect URI** to: `http://127.0.0.1:8443/callback` (or your configured loopback IP and port).
    - Select **Web API**.
 
 ## Installation & Build
@@ -63,16 +63,17 @@ rukia spotify:playlist:6UUCMxk575eDTwSWa0qQhB
 
 ### First-Time Configuration
 
-On first launch, if no credentials are configured, `rukia` interactively requests:
+On first launch, if no Client ID is configured, `rukia` interactively requests:
 - **Client ID**
-- **Client Secret**
 
-These credentials, along with access and refresh tokens, are securely stored in `~/.config/rukia/config.json` with restricted permissions (`0600`).
+The Client ID and access and refresh tokens are stored in `~/.config/rukia/config.json` with restricted permissions (`0600`). A client secret is not needed for new PKCE logins. Existing configurations with a client secret continue to refresh legacy tokens; the stored secret is removed after a new PKCE login.
 
 Alternatively, credentials can be provided via environment variables:
 - `SPOTIFY_CLIENT_ID`
-- `SPOTIFY_CLIENT_SECRET`
-- `SPOTIFY_REDIRECT_URI` (optional, defaults to `https://127.0.0.1:8443/callback`)
+- `SPOTIFY_CLIENT_SECRET` (optional, for legacy token refresh)
+- `SPOTIFY_REDIRECT_URI` (optional, defaults to `http://127.0.0.1:8443/callback`)
+
+Existing configured HTTPS redirect URIs remain supported. Register the exact URI in the Spotify Developer Dashboard. Spotify requires a literal loopback IP for new redirect URI registrations.
 
 ## Keyboard Controls
 
@@ -95,7 +96,7 @@ Alternatively, credentials can be provided via environment variables:
 
 - **`cmd/rukia/`**: Application entry point.
 - **`internal/app/`**: Application lifecycle orchestration, CLI argument parsing, and error boundaries.
-- **`internal/auth/`**: Spotify OAuth 2.0 flow, in-memory TLS certificate generation, HTTPS callback server, configuration persistence.
+- **`internal/auth/`**: Spotify OAuth 2.0 PKCE flow, callback server, optional in-memory TLS certificate generation, configuration persistence.
 - **`internal/spotify/`**: Spotify Web API client, playlist metadata and track pagination, player controls.
 - **`internal/player/`**: Embedded `go-librespot` daemon lifecycle and PulseAudio sink.
 - **`internal/ui/`**: Bubble Tea model, Lip Gloss styles, exit modal overlay, and renderers.

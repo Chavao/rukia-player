@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/x/term"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/spotify"
 )
@@ -38,12 +37,12 @@ type OAuthFlow struct {
 // NewOAuthFlow creates an initialized OAuthFlow from the application Config.
 func NewOAuthFlow(cfg *Config) *OAuthFlow {
 	oauthConfig := &oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		RedirectURL:  cfg.RedirectURI,
-		Scopes:       SpotifyScopes,
-		Endpoint:     spotify.Endpoint,
+		ClientID:    cfg.ClientID,
+		RedirectURL: cfg.RedirectURI,
+		Scopes:      SpotifyScopes,
+		Endpoint:    spotify.Endpoint,
 	}
+	oauthConfig.Endpoint.AuthStyle = oauth2.AuthStyleInParams
 
 	return &OAuthFlow{
 		config: oauthConfig,
@@ -60,14 +59,14 @@ func GenerateRandomState() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// GetAuthURL generates the Spotify authorization URL with state.
-func (o *OAuthFlow) GetAuthURL(state string) string {
-	return o.config.AuthCodeURL(state, oauth2.AccessTypeOffline)
+// GetAuthURL generates the Spotify authorization URL with state and a PKCE challenge.
+func (o *OAuthFlow) GetAuthURL(state, verifier string) string {
+	return o.config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
 }
 
 // Exchange swaps the authorization code for an OAuth2 token (access + refresh tokens).
-func (o *OAuthFlow) Exchange(ctx context.Context, code string) (*oauth2.Token, error) {
-	token, err := o.config.Exchange(ctx, code)
+func (o *OAuthFlow) Exchange(ctx context.Context, code, verifier string) (*oauth2.Token, error) {
+	token, err := o.config.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange token: %w", err)
 	}
@@ -76,6 +75,12 @@ func (o *OAuthFlow) Exchange(ctx context.Context, code string) (*oauth2.Token, e
 
 // TokenSource returns a refreshing TokenSource backed by the OAuth config.
 func (o *OAuthFlow) TokenSource(ctx context.Context, token *oauth2.Token) oauth2.TokenSource {
+	if o.appCfg.AuthFlow != "pkce" && o.appCfg.ClientSecret != "" {
+		legacy := *o.config
+		legacy.ClientSecret = o.appCfg.ClientSecret
+		legacy.Endpoint.AuthStyle = oauth2.AuthStyleInHeader
+		return legacy.TokenSource(ctx, token)
+	}
 	return o.config.TokenSource(ctx, token)
 }
 
@@ -107,8 +112,11 @@ func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 	}
 
 	if p.lastTok == nil || tok.AccessToken != p.lastTok.AccessToken {
-		p.lastTok = tok
-		_ = p.cfg.SetToken(tok)
+		if err := p.cfg.SetToken(tok); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to save refreshed Spotify token: %v\n", err)
+		} else {
+			p.lastTok = tok
+		}
 	}
 
 	return tok, nil
@@ -124,6 +132,7 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 	if err != nil {
 		return nil, err
 	}
+	verifier := oauth2.GenerateVerifier()
 
 	loginCtx, cancel := context.WithCancel(ctx)
 	callback, err := StartCallbackServer(loginCtx, o.appCfg.RedirectURI)
@@ -136,7 +145,7 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 		<-callback.Done
 	}()
 
-	authURL := o.GetAuthURL(state)
+	authURL := o.GetAuthURL(state, verifier)
 
 	fmt.Println("Launching browser to authenticate with Spotify...")
 	fmt.Printf("If your browser does not open automatically, visit this URL:\n\n%s\n\n", authURL)
@@ -151,12 +160,12 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 			return nil, errors.New("state mismatch in OAuth callback; possible CSRF")
 		}
 
-		token, err := o.Exchange(ctx, res.Code)
+		token, err := o.Exchange(ctx, res.Code, verifier)
 		if err != nil {
 			return nil, err
 		}
 
-		if err := o.appCfg.SetToken(token); err != nil {
+		if err := o.appCfg.SetPKCEToken(token); err != nil {
 			return nil, fmt.Errorf("failed to save token to config: %w", err)
 		}
 
@@ -188,7 +197,7 @@ func OpenBrowser(targetURL string) error {
 	return cmd.Start()
 }
 
-// PromptCredentialsIfMissing prompts the user via stdin for Spotify Client ID and Client Secret if not already set.
+// PromptCredentialsIfMissing prompts the user for the Spotify Client ID if it is missing.
 func PromptCredentialsIfMissing(cfg *Config) error {
 	if cfg.HasCredentials() {
 		return nil
@@ -198,7 +207,7 @@ func PromptCredentialsIfMissing(cfg *Config) error {
 
 	fmt.Println("=================================================================")
 	fmt.Println("rukia - Spotify CLI Player Setup")
-	fmt.Println("Spotify Client credentials not found.")
+	fmt.Println("Spotify Client ID not found.")
 	fmt.Println("Please register an application at https://developer.spotify.com/dashboard")
 	fmt.Printf("Ensure Redirect URI is set to: %s\n", cfg.RedirectURI)
 	fmt.Println("=================================================================")
@@ -210,26 +219,8 @@ func PromptCredentialsIfMissing(cfg *Config) error {
 	}
 	cfg.ClientID = strings.TrimSpace(clientID)
 
-	fmt.Print("Enter Spotify Client Secret: ")
-	var clientSecret string
-	if term.IsTerminal(os.Stdin.Fd()) {
-		byteSecret, err := term.ReadPassword(os.Stdin.Fd())
-		fmt.Println()
-		if err != nil {
-			return fmt.Errorf("failed to read client secret: %w", err)
-		}
-		clientSecret = string(byteSecret)
-	} else {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read client secret: %w", err)
-		}
-		clientSecret = line
-	}
-	cfg.ClientSecret = strings.TrimSpace(clientSecret)
-
 	if !cfg.HasCredentials() {
-		return errors.New("client ID and client secret cannot be empty")
+		return errors.New("client ID cannot be empty")
 	}
 
 	if err := cfg.Save(); err != nil {
