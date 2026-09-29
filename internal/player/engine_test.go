@@ -53,3 +53,30 @@ func TestEngineDefaultName(t *testing.T) {
 		t.Errorf("expected default device name %s, got %s", DefaultDeviceName, engine.DeviceName())
 	}
 }
+
+func TestEngineVolume(t *testing.T) {
+	engine := NewEngine("rukia-vol-test")
+	if engine.Volume() != 100 {
+		t.Errorf("expected initial volume 100, got %d", engine.Volume())
+	}
+
+	engine.SetVolume(75)
+	if engine.Volume() != 75 {
+		t.Errorf("expected volume 75, got %d", engine.Volume())
+	}
+
+	// Boundary checks
+	engine.SetVolume(150)
+	if engine.Volume() != 100 {
+		t.Errorf("expected clamped volume 100, got %d", engine.Volume())
+	}
+
+	engine.SetVolume(-20)
+	if engine.Volume() != 0 {
+		t.Errorf("expected clamped volume 0, got %d", engine.Volume())
+	}
+
+	// Pause and resume on unstarted engine should be safe
+	engine.Pause()
+	engine.Resume()
+}

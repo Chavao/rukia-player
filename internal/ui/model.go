@@ -14,6 +14,7 @@ import (
 
 type tickMsg time.Time
 type playbackStateMsg *spotify.PlaybackState
+type volumeEventMsg int
 type errMsg error
 
 // Model is the main Bubble Tea application model.
@@ -73,7 +74,22 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		tickCmd(),
 		m.pollPlaybackCmd(),
+		m.waitForVolumeEventCmd(),
 	)
+}
+
+func (m *Model) waitForVolumeEventCmd() tea.Cmd {
+	if m.playerEngine == nil {
+		return nil
+	}
+	volEvents := m.playerEngine.VolumeEvents()
+	return func() tea.Msg {
+		vol, ok := <-volEvents
+		if !ok {
+			return nil
+		}
+		return volumeEventMsg(vol)
+	}
 }
 
 func tickCmd() tea.Cmd {
@@ -134,6 +150,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+
+	case volumeEventMsg:
+		m.volume = int(msg)
+		cmds = append(cmds, m.waitForVolumeEventCmd(), m.syncSpotifyVolumeCmd(int(msg)))
 
 	case errMsg:
 		m.err = msg
@@ -230,9 +250,15 @@ func (m *Model) togglePlayPauseCmd() tea.Cmd {
 
 		if m.isPlaying {
 			m.isPlaying = false
+			if m.playerEngine != nil {
+				m.playerEngine.Pause()
+			}
 			_ = m.spotifyClient.Pause(ctx, m.deviceID)
 		} else {
 			m.isPlaying = true
+			if m.playerEngine != nil {
+				m.playerEngine.Resume()
+			}
 			_ = m.spotifyClient.Resume(ctx, m.deviceID)
 		}
 		return nil
@@ -244,6 +270,9 @@ func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
+		if m.playerEngine != nil {
+			m.playerEngine.Resume()
+		}
 		if m.playlist != nil {
 			_ = m.spotifyClient.PlayPlaylist(ctx, m.deviceID, m.playlist.URI, idx)
 		}
@@ -252,6 +281,18 @@ func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 }
 
 func (m *Model) setVolumeCmd(vol int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if m.playerEngine != nil {
+			m.playerEngine.SetVolume(vol)
+		}
+		_ = m.spotifyClient.SetVolume(ctx, m.deviceID, vol)
+		return nil
+	}
+}
+
+func (m *Model) syncSpotifyVolumeCmd(vol int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

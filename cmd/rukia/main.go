@@ -115,10 +115,13 @@ func main() {
 		}
 	}
 
-	// 6. Start embedded go-librespot player engine
+	// 6. Start PulseAudio audio sink
 	playerEngine := player.NewEngine("rukia")
+	if cfg.Volume > 0 {
+		playerEngine.SetVolume(cfg.Volume)
+	}
 	if err := playerEngine.Start(ctx, user.ID, cfg.Token.AccessToken); err != nil {
-		fmt.Printf("Notice: Embedded audio engine failed (%v); controlling active Spotify Connect device.\n", err)
+		fmt.Printf("Notice: PulseAudio audio sink initialization failed (%v)\n", err)
 	}
 	defer playerEngine.Close()
 
