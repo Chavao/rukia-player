@@ -16,6 +16,10 @@ type tickMsg time.Time
 type playbackStateMsg *spotify.PlaybackState
 type volumeEventMsg int
 type errMsg error
+type playbackChangedMsg struct {
+	playing bool
+	err     error
+}
 
 // Model is the main Bubble Tea application model.
 type Model struct {
@@ -155,6 +159,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.volume = int(msg)
 		cmds = append(cmds, m.waitForVolumeEventCmd(), m.syncSpotifyVolumeCmd(int(msg)))
 
+	case playbackChangedMsg:
+		if msg.err == nil {
+			m.isPlaying = msg.playing
+		} else {
+			m.err = msg.err
+		}
+
 	case errMsg:
 		m.err = msg
 
@@ -196,7 +207,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter):
 			if m.cursor == m.playingIdx {
 				// Toggle Play/Pause
-				cmds = append(cmds, m.togglePlayPauseCmd())
+				cmds = append(cmds, m.togglePlayPauseCmd(!m.isPlaying))
 			} else {
 				// Play selected track
 				m.playingIdx = m.cursor
@@ -206,7 +217,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Space):
-			cmds = append(cmds, m.togglePlayPauseCmd())
+			cmds = append(cmds, m.togglePlayPauseCmd(!m.isPlaying))
 
 		case key.Matches(msg, m.keys.VolumeUp):
 			if m.volume < 100 {
@@ -243,78 +254,108 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) togglePlayPauseCmd() tea.Cmd {
+func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
+	client := m.spotifyClient
+	engine := m.playerEngine
+	deviceID := m.deviceID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		if m.isPlaying {
-			m.isPlaying = false
-			if m.playerEngine != nil {
-				m.playerEngine.Pause()
+		var err error
+		if shouldPlay {
+			if engine != nil {
+				engine.Resume()
 			}
-			_ = m.spotifyClient.Pause(ctx, m.deviceID)
+			if client != nil {
+				err = client.Resume(ctx, deviceID)
+			}
 		} else {
-			m.isPlaying = true
-			if m.playerEngine != nil {
-				m.playerEngine.Resume()
+			if engine != nil {
+				engine.Pause()
 			}
-			_ = m.spotifyClient.Resume(ctx, m.deviceID)
+			if client != nil {
+				err = client.Pause(ctx, deviceID)
+			}
 		}
-		return nil
+		return playbackChangedMsg{playing: shouldPlay, err: err}
 	}
 }
 
 func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
+	client := m.spotifyClient
+	engine := m.playerEngine
+	deviceID := m.deviceID
+	uri := ""
+	if m.playlist != nil {
+		uri = m.playlist.URI
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if m.playerEngine != nil {
-			m.playerEngine.Resume()
+		if engine != nil {
+			engine.Resume()
 		}
-		if m.playlist != nil {
-			_ = m.spotifyClient.PlayPlaylist(ctx, m.deviceID, m.playlist.URI, idx)
+		if client != nil && uri != "" {
+			_ = client.PlayPlaylist(ctx, deviceID, uri, idx)
 		}
 		return nil
 	}
 }
 
 func (m *Model) setVolumeCmd(vol int) tea.Cmd {
+	client := m.spotifyClient
+	engine := m.playerEngine
+	deviceID := m.deviceID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if m.playerEngine != nil {
-			m.playerEngine.SetVolume(vol)
+		if engine != nil {
+			engine.SetVolume(vol)
 		}
-		_ = m.spotifyClient.SetVolume(ctx, m.deviceID, vol)
+		if client != nil {
+			_ = client.SetVolume(ctx, deviceID, vol)
+		}
 		return nil
 	}
 }
 
 func (m *Model) syncSpotifyVolumeCmd(vol int) tea.Cmd {
+	client := m.spotifyClient
+	deviceID := m.deviceID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = m.spotifyClient.SetVolume(ctx, m.deviceID, vol)
+		if client != nil {
+			_ = client.SetVolume(ctx, deviceID, vol)
+		}
 		return nil
 	}
 }
 
 func (m *Model) setShuffleCmd(shuf bool) tea.Cmd {
+	client := m.spotifyClient
+	deviceID := m.deviceID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = m.spotifyClient.SetShuffle(ctx, m.deviceID, shuf)
+		if client != nil {
+			_ = client.SetShuffle(ctx, deviceID, shuf)
+		}
 		return nil
 	}
 }
 
 func (m *Model) setRepeatCmd(mode string) tea.Cmd {
+	client := m.spotifyClient
+	deviceID := m.deviceID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = m.spotifyClient.SetRepeat(ctx, m.deviceID, mode)
+		if client != nil {
+			_ = client.SetRepeat(ctx, deviceID, mode)
+		}
 		return nil
 	}
 }

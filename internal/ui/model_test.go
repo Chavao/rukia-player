@@ -82,3 +82,51 @@ func TestModelTick(t *testing.T) {
 		t.Errorf("expected progressMs 6000, got %d", updated.progressMs)
 	}
 }
+
+func TestModelPlaybackChangedMsg(t *testing.T) {
+	model := NewModel(nil, nil, nil, nil, "dev-1")
+	model.isPlaying = false
+
+	m, _ := model.Update(playbackChangedMsg{playing: true, err: nil})
+	updated := m.(*Model)
+	if !updated.isPlaying {
+		t.Error("expected isPlaying to be true after successful playbackChangedMsg")
+	}
+
+	// When error occurs, isPlaying shouldn't change
+	m, _ = model.Update(playbackChangedMsg{playing: false, err: assertErr("failed")})
+	updated = m.(*Model)
+	if !updated.isPlaying {
+		t.Error("expected isPlaying to remain true after failed playbackChangedMsg")
+	}
+}
+
+func TestTogglePlayPauseCmdNoModelMutation(t *testing.T) {
+	model := NewModel(nil, nil, nil, nil, "dev-1")
+	model.isPlaying = true
+
+	cmd := model.togglePlayPauseCmd(false)
+	if cmd == nil {
+		t.Fatal("expected non-nil tea.Cmd")
+	}
+
+	// Model itself should not have changed synchronously
+	if !model.isPlaying {
+		t.Error("model.isPlaying should not be mutated when generating cmd")
+	}
+
+	msg := cmd()
+	changedMsg, ok := msg.(playbackChangedMsg)
+	if !ok {
+		t.Fatalf("expected playbackChangedMsg, got %T", msg)
+	}
+	if changedMsg.playing != false {
+		t.Errorf("expected playing=false, got %v", changedMsg.playing)
+	}
+}
+
+type customErr string
+
+func (e customErr) Error() string { return string(e) }
+func assertErr(s string) error    { return customErr(s) }
+
