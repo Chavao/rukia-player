@@ -76,10 +76,13 @@ func TestEngineVolume(t *testing.T) {
 	if engine.Volume() != 0 {
 		t.Errorf("expected clamped volume 0, got %d", engine.Volume())
 	}
+}
 
-	// Pause and resume on unstarted engine should be safe
-	engine.Pause()
-	engine.Resume()
+func TestEngineErrorsChannel(t *testing.T) {
+	engine := NewEngine("rukia-err-test")
+	if engine.Errors() == nil {
+		t.Fatal("expected non-nil errors channel")
+	}
 }
 
 func TestFileStateStore(t *testing.T) {

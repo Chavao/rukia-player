@@ -15,7 +15,7 @@ import (
 
 type tickMsg time.Time
 type playbackStateMsg *spotify.PlaybackState
-type volumeEventMsg int
+type playerErrorMsg error
 type errMsg error
 type playbackChangedMsg struct {
 	playing bool
@@ -90,21 +90,24 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		tickCmd(),
 		m.pollPlaybackCmd(),
-		m.waitForVolumeEventCmd(),
+		m.waitForPlayerErrorCmd(),
 	)
 }
 
-func (m *Model) waitForVolumeEventCmd() tea.Cmd {
+func (m *Model) waitForPlayerErrorCmd() tea.Cmd {
 	if m.playerEngine == nil {
 		return nil
 	}
-	volEvents := m.playerEngine.VolumeEvents()
+	errCh := m.playerEngine.Errors()
 	return func() tea.Msg {
-		vol, ok := <-volEvents
-		if !ok {
+		if errCh == nil {
 			return nil
 		}
-		return volumeEventMsg(vol)
+		err, ok := <-errCh
+		if !ok || err == nil {
+			return nil
+		}
+		return playerErrorMsg(err)
 	}
 }
 
@@ -167,9 +170,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case volumeEventMsg:
-		m.volume = int(msg)
-		cmds = append(cmds, m.waitForVolumeEventCmd(), m.syncSpotifyVolumeCmd(int(msg)))
+	case playerErrorMsg:
+		m.err = fmt.Errorf("audio player error: %w", error(msg))
+		cmds = append(cmds, m.waitForPlayerErrorCmd(), clearErrorCmd(5*time.Second))
 
 	case playbackChangedMsg:
 		if msg.err == nil {
@@ -279,7 +282,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
 	client := m.spotifyClient
-	engine := m.playerEngine
 	deviceID := m.deviceID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -287,16 +289,10 @@ func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
 
 		var err error
 		if shouldPlay {
-			if engine != nil {
-				engine.Resume()
-			}
 			if client != nil {
 				err = client.Resume(ctx, deviceID)
 			}
 		} else {
-			if engine != nil {
-				engine.Pause()
-			}
 			if client != nil {
 				err = client.Pause(ctx, deviceID)
 			}
@@ -307,7 +303,6 @@ func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
 
 func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 	client := m.spotifyClient
-	engine := m.playerEngine
 	deviceID := m.deviceID
 	uri := ""
 	if m.playlist != nil {
@@ -317,9 +312,6 @@ func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if engine != nil {
-			engine.Resume()
-		}
 		var err error
 		if client != nil && uri != "" {
 			err = client.PlayPlaylist(ctx, deviceID, uri, idx)
@@ -330,33 +322,15 @@ func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 
 func (m *Model) setVolumeCmd(vol int) tea.Cmd {
 	client := m.spotifyClient
-	engine := m.playerEngine
 	deviceID := m.deviceID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if engine != nil {
-			engine.SetVolume(vol)
-		}
 		var err error
 		if client != nil {
 			err = client.SetVolume(ctx, deviceID, vol)
 		}
 		return actionResultMsg{action: "change volume", err: err}
-	}
-}
-
-func (m *Model) syncSpotifyVolumeCmd(vol int) tea.Cmd {
-	client := m.spotifyClient
-	deviceID := m.deviceID
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		var err error
-		if client != nil {
-			err = client.SetVolume(ctx, deviceID, vol)
-		}
-		return actionResultMsg{action: "sync volume", err: err}
 	}
 }
 

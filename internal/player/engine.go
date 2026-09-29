@@ -155,7 +155,6 @@ type Engine struct {
 	deviceName string
 	app        *daemon.App
 	cancel     context.CancelFunc
-	volEvents  chan int
 	errCh      chan error
 	mu         sync.Mutex
 	running    bool
@@ -169,7 +168,6 @@ func NewEngine(deviceName string) *Engine {
 	}
 	return &Engine{
 		deviceName: deviceName,
-		volEvents:  make(chan int, 8),
 		errCh:      make(chan error, 1),
 		volume:     100,
 	}
@@ -247,13 +245,7 @@ func (e *Engine) Start(parentCtx context.Context, username, accessToken string) 
 	return nil
 }
 
-// Pause pauses local audio playback.
-func (e *Engine) Pause() {}
-
-// Resume unpauses local audio playback.
-func (e *Engine) Resume() {}
-
-// SetVolume updates the engine volume.
+// SetVolume updates the engine initial volume.
 func (e *Engine) SetVolume(percent int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -272,11 +264,6 @@ func (e *Engine) Volume() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.volume
-}
-
-// VolumeEvents provides a channel receiving volume adjustments from the audio server.
-func (e *Engine) VolumeEvents() <-chan int {
-	return e.volEvents
 }
 
 // Errors returns a channel to monitor background engine failures.

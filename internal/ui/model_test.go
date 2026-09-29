@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
 )
 
@@ -174,4 +175,31 @@ func TestModelActionResultMsgAndErrorDisplay(t *testing.T) {
 		t.Error("view should not show error indicator after clearErrorMsg")
 	}
 }
+
+func TestWaitForPlayerErrorCmd(t *testing.T) {
+	eng := player.NewEngine("test-engine")
+	model := NewModel(nil, eng, nil, nil, "dev-1")
+
+	cmd := model.waitForPlayerErrorCmd()
+	if cmd == nil {
+		t.Fatal("expected non-nil tea.Cmd for waitForPlayerErrorCmd")
+	}
+
+	// Dispatch an error into the engine's error channel via background
+	go func() {
+		eng.Errors()
+	}()
+
+	// Simulate handling playerErrorMsg
+	m, cmd := model.Update(playerErrorMsg(assertErr("pulseaudio died")))
+	model = m.(*Model)
+
+	if model.err == nil || !strings.Contains(model.err.Error(), "pulseaudio died") {
+		t.Errorf("expected model.err to contain pulseaudio died, got: %v", model.err)
+	}
+	if cmd == nil {
+		t.Fatal("expected cmd to be scheduled")
+	}
+}
+
 
