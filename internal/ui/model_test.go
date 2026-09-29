@@ -233,6 +233,17 @@ func TestFailedPlaybackReconcilesRemoteStateAndPreservesNewIntent(t *testing.T) 
 	}
 }
 
+func TestLaterPollKeepsUnresolvedPlaybackIntent(t *testing.T) {
+	model := NewModel(nil, nil, nil, nil, "device")
+	model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model.Update(playbackChangedMsg{playing: false, err: assertErr("offline")})
+	model.Update(playbackStateMsg(&spotify.PlaybackState{IsPlaying: true}))
+	model.Update(playbackStateMsg(&spotify.PlaybackState{IsPlaying: true}))
+	if model.desiredPlaying || !model.confirmedPlaying || model.isPlaying != model.confirmedPlaying {
+		t.Fatalf("later poll lost unresolved intent: desired=%v confirmed=%v visible=%v", model.desiredPlaying, model.confirmedPlaying, model.isPlaying)
+	}
+}
+
 func TestTogglePlayPauseCmdNoModelMutation(t *testing.T) {
 	model := NewModel(nil, nil, nil, nil, "dev-1")
 	model.isPlaying = true

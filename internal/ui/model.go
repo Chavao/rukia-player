@@ -235,6 +235,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playbackStateMsg:
 		if msg != nil {
 			if !m.playbackPending {
+				previouslyConfirmed := m.confirmedPlaying
 				m.confirmedPlaying = msg.IsPlaying
 				if m.playbackReconcile {
 					m.playbackReconcile = false
@@ -244,7 +245,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.isPlaying = m.confirmedPlaying
 					}
 				} else {
-					m.desiredPlaying = msg.IsPlaying
+					if m.desiredPlaying == previouslyConfirmed {
+						m.desiredPlaying = msg.IsPlaying
+					}
 					m.isPlaying = msg.IsPlaying
 				}
 			}
