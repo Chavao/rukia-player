@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -102,17 +104,22 @@ func Run(ctx context.Context, args []string) error {
 	// Fetch current user
 	user, err := spotifyClient.GetCurrentUser(ctx)
 	if err != nil {
-		// If token was rejected, re-authenticate once
-		fmt.Printf("Session expired, re-authenticating: %v\n", err)
-		token, err := oauthFlow.RunInteractiveLogin(ctx)
-		if err != nil {
-			return fmt.Errorf("authentication failed: %w", err)
-		}
-		cfg.Token = token
-		httpClient, _ = oauthFlow.Client(ctx, cfg.Token)
-		spotifyClient = spotify.NewClient(httpClient)
-		user, err = spotifyClient.GetCurrentUser(ctx)
-		if err != nil {
+		var apiErr *spotify.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
+			// If token was rejected with 401, re-authenticate once
+			fmt.Printf("Session expired (401), re-authenticating: %v\n", err)
+			token, err := oauthFlow.RunInteractiveLogin(ctx)
+			if err != nil {
+				return fmt.Errorf("authentication failed: %w", err)
+			}
+			cfg.Token = token
+			httpClient, _ = oauthFlow.Client(ctx, cfg.Token)
+			spotifyClient = spotify.NewClient(httpClient)
+			user, err = spotifyClient.GetCurrentUser(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to connect to Spotify: %w", err)
+			}
+		} else {
 			return fmt.Errorf("failed to connect to Spotify: %w", err)
 		}
 	}

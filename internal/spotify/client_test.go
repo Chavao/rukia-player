@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClientGetCurrentUser(t *testing.T) {
@@ -120,3 +121,93 @@ func TestTrackAndPlaylistStructures(t *testing.T) {
 		t.Fatal("unexpected playlist data")
 	}
 }
+
+func TestAPIErrorStructure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"error":{"status":429,"message":"API rate limit exceeded"}}`))
+	}))
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	err = checkError(resp)
+	if err == nil {
+		t.Fatal("expected error from checkError")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+
+	if apiErr.StatusCode != 429 {
+		t.Errorf("expected status code 429, got %d", apiErr.StatusCode)
+	}
+	if apiErr.Message != "API rate limit exceeded" {
+		t.Errorf("expected message 'API rate limit exceeded', got %s", apiErr.Message)
+	}
+	if apiErr.RetryAfter != 5*time.Second {
+		t.Errorf("expected RetryAfter 5s, got %v", apiErr.RetryAfter)
+	}
+}
+
+func TestClientGetWithRetryAfter429(t *testing.T) {
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":{"status":429,"message":"rate limit"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"diego","display_name":"Diego Chavão"}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	user, err := c.GetCurrentUser(context.Background())
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got %v", err)
+	}
+	if user.DisplayName != "Diego Chavão" {
+		t.Errorf("expected 'Diego Chavão', got %s", user.DisplayName)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestClientGetWithTransient503(t *testing.T) {
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"devices":[{"id":"dev1","name":"rukia"}]}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	devices, err := c.GetDevices(context.Background())
+	if err != nil {
+		t.Fatalf("expected 503 retry to succeed, got %v", err)
+	}
+	if len(devices) != 1 || devices[0].Name != "rukia" {
+		t.Errorf("unexpected devices: %+v", devices)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
