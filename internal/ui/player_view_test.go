@@ -95,3 +95,20 @@ func TestRenderBottomBarWithError(t *testing.T) {
 	}
 }
 
+func TestRenderHeaderWidths(t *testing.T) {
+	pl := &spotify.Playlist{
+		Name:          "Focus Beats",
+		TotalTracks:   12,
+		TotalDuration: 36 * time.Minute,
+	}
+
+	widths := []int{0, 1, 5, 10, 20, 29, 30, 40, 60, 80, 120, 200}
+	for _, w := range widths {
+		out := RenderHeader("Diego", pl, w)
+		if w == 0 && out != "" {
+			t.Errorf("expected empty string for width 0, got %q", out)
+		}
+	}
+}
+
+

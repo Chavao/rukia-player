@@ -11,8 +11,17 @@ import (
 
 // RenderHeader renders the top status bar matching Image 2.
 func RenderHeader(userName string, playlist *spotify.Playlist, width int) string {
-	if playlist == nil {
+	if playlist == nil || width <= 0 {
 		return ""
+	}
+
+	centerText := playlist.Name
+	center := HeaderAccentStyle.Render(centerText)
+	centerW := lipgloss.Width(center)
+
+	// If width is very narrow, render only the playlist name truncated to width
+	if width < 30 {
+		return HeaderAccentStyle.Render(truncateString(centerText, width))
 	}
 
 	leftText := fmt.Sprintf("< Library of %s", userName)
@@ -20,29 +29,30 @@ func RenderHeader(userName string, playlist *spotify.Playlist, width int) string
 		leftText = "< Library"
 	}
 	left := HeaderLibraryStyle.Render(leftText)
-
-	center := HeaderAccentStyle.Render(playlist.Name)
+	leftW := lipgloss.Width(left)
 
 	durationStr := util.FormatPlaylistDuration(playlist.TotalDuration)
 	rightText := fmt.Sprintf("%d tracks, %s", playlist.TotalTracks, durationStr)
 	right := HeaderInfoStyle.Render(rightText)
-
-	leftW := lipgloss.Width(left)
-	centerW := lipgloss.Width(center)
 	rightW := lipgloss.Width(right)
 
-	gap := (width - leftW - rightW - centerW) / 2
-	if gap < 1 {
-		gap = 1
+	// If terminal cannot fit all three sections, drop right metadata
+	if width < leftW+centerW+rightW+2 {
+		if width < leftW+centerW+1 {
+			// Compact mode: show only playlist name truncated to available width
+			return HeaderAccentStyle.Render(truncateString(centerText, width))
+		}
+		// Medium width: show left and center
+		gap := max(1, width-leftW-centerW)
+		return left + strings.Repeat(" ", gap) + center
 	}
 
-	paddingLeft := strings.Repeat(" ", gap)
-	paddingRight := strings.Repeat(" ", width-leftW-rightW-centerW-gap)
-	if len(paddingRight) < 1 {
-		paddingRight = " "
-	}
+	// Normal width: three areas (left, center, right)
+	rem := width - leftW - rightW - centerW
+	gapLeft := max(1, rem/2)
+	gapRight := max(1, rem-gapLeft)
 
-	return left + paddingLeft + center + paddingRight + right
+	return left + strings.Repeat(" ", gapLeft) + center + strings.Repeat(" ", gapRight) + right
 }
 
 // RenderTrackTable renders the scrollable list of tracks with three columns.
