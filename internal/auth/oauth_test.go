@@ -338,3 +338,51 @@ func TestEnsureTokenExpiredNetworkError(t *testing.T) {
 		t.Fatalf("expected error message to contain 'failed to refresh Spotify session', got: %v", err)
 	}
 }
+
+type staticTokenSource struct {
+	tok *oauth2.Token
+}
+
+func (s *staticTokenSource) Token() (*oauth2.Token, error) {
+	return s.tok, nil
+}
+
+func TestPersistingTokenSourceErrorLogger(t *testing.T) {
+	// Setup a config pointing to an invalid path so SetToken fails
+	t.Setenv("XDG_CONFIG_HOME", "/dev/null/cannot_exist")
+	cfg := DefaultConfig()
+
+	var loggedWarning string
+	flow := NewOAuthFlow(cfg)
+	flow.SetErrorLogger(func(format string, args ...any) {
+		loggedWarning = fmt.Sprintf(format, args...)
+	})
+
+	initialTok := &oauth2.Token{AccessToken: "token-1", Expiry: time.Now().Add(time.Hour)}
+	newTok := &oauth2.Token{AccessToken: "token-2", Expiry: time.Now().Add(time.Hour)}
+
+	pts := &persistingTokenSource{
+		src:       &staticTokenSource{tok: newTok},
+		cfg:       cfg,
+		lastTok:   initialTok,
+		errLogger: flow.errLogger,
+	}
+
+	tok, err := pts.Token()
+	if err != nil {
+		t.Fatalf("Token() should return token even if persist fails: %v", err)
+	}
+	if tok.AccessToken != "token-2" {
+		t.Fatalf("expected token-2, got %s", tok.AccessToken)
+	}
+	if !strings.Contains(loggedWarning, "failed to save refreshed Spotify token") {
+		t.Fatalf("expected logged warning in errLogger sink, got %q", loggedWarning)
+	}
+
+	// When errLogger is nil, no panic and silent
+	pts.errLogger = nil
+	pts.lastTok = initialTok
+	if _, err := pts.Token(); err != nil {
+		t.Fatalf("unexpected error with nil logger: %v", err)
+	}
+}

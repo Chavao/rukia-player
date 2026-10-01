@@ -310,7 +310,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			cmds = append(cmds, m.showError(fmt.Errorf("failed to %s: %w", msg.action, msg.err), 3*time.Second))
-		} else {
+			cmds = append(cmds, m.pollPlaybackCmd())
+		} else if msg.action == "play track" {
 			cmds = append(cmds, m.pollPlaybackCmd())
 		}
 

@@ -385,21 +385,54 @@ func TestModelActionResultMsgAndErrorDisplay(t *testing.T) {
 	}
 }
 
-func TestSuccessfulRemoteActionPollsImmediately(t *testing.T) {
+func TestRemoteActionPollingPolicy(t *testing.T) {
 	polls := 0
 	model := NewModel(&mockSpotifyController{getPlaybackStateFunc: func(context.Context) (*spotify.PlaybackState, error) {
 		polls++
 		return &spotify.PlaybackState{IsPlaying: true}, nil
 	}}, nil, nil, nil, "device")
-	for _, action := range []string{"play track", "change volume", "toggle shuffle", "toggle repeat"} {
+
+	// Success cases: only "play track" should trigger an immediate poll
+	for _, action := range []string{"change volume", "toggle shuffle", "toggle repeat"} {
 		_, cmd := model.Update(actionResultMsg{action: action})
-		if cmd == nil {
-			t.Fatalf("%s did not schedule reconciliation", action)
+		if cmd != nil {
+			t.Fatalf("%s unexpectedly scheduled immediate poll on success", action)
 		}
-		model.Update(cmd())
 	}
-	if polls != 4 {
-		t.Fatalf("got %d immediate polls, want 4", polls)
+
+	// "play track" success triggers immediate poll to sync track info
+	_, playCmd := model.Update(actionResultMsg{action: "play track"})
+	if playCmd == nil {
+		t.Fatal("play track success must schedule immediate poll")
+	}
+	model.Update(playCmd())
+	if polls != 1 {
+		t.Fatalf("expected 1 poll from play track success, got %d", polls)
+	}
+
+	// Failure cases: all actions must schedule immediate reconciliation poll
+	for _, action := range []string{"play track", "change volume", "toggle shuffle", "toggle repeat"} {
+		pollsBefore := polls
+		_, cmd := model.Update(actionResultMsg{action: action, err: assertErr("failed")})
+		if cmd == nil {
+			t.Fatalf("%s failure did not schedule reconciliation poll", action)
+		}
+		// Execute batch command
+		if batch, ok := cmd().(tea.BatchMsg); ok {
+			for _, c := range batch {
+				if c != nil {
+					msg := c()
+					if _, isPoll := msg.(playbackStateMsg); isPoll {
+						model.Update(msg)
+					}
+				}
+			}
+		} else {
+			model.Update(cmd())
+		}
+		if polls <= pollsBefore {
+			t.Fatalf("%s failure did not trigger poll execution", action)
+		}
 	}
 }
 

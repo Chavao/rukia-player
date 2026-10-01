@@ -30,9 +30,15 @@ var SpotifyScopes = []string{
 
 // OAuthFlow handles Spotify OAuth 2.0 interactions.
 type OAuthFlow struct {
-	config  *oauth2.Config
-	appCfg  *Config
-	loginFn func(context.Context) (*oauth2.Token, error)
+	config    *oauth2.Config
+	appCfg    *Config
+	loginFn   func(context.Context) (*oauth2.Token, error)
+	errLogger func(format string, args ...any)
+}
+
+// SetErrorLogger configures an error sink for background token operations.
+func (o *OAuthFlow) SetErrorLogger(logger func(format string, args ...any)) {
+	o.errLogger = logger
 }
 
 // NewOAuthFlow creates an initialized OAuthFlow from the application Config.
@@ -92,18 +98,20 @@ func (o *OAuthFlow) Client(ctx context.Context, token *oauth2.Token) (*http.Clie
 	ts := o.TokenSource(ctx, token)
 	// Wrap token source to persist refreshed token if it changes
 	persistingTS := &persistingTokenSource{
-		src:     ts,
-		cfg:     o.appCfg,
-		lastTok: token,
+		src:       ts,
+		cfg:       o.appCfg,
+		lastTok:   token,
+		errLogger: o.errLogger,
 	}
 	return oauth2.NewClient(ctx, persistingTS), persistingTS
 }
 
 type persistingTokenSource struct {
-	mu      sync.Mutex
-	src     oauth2.TokenSource
-	cfg     *Config
-	lastTok *oauth2.Token
+	mu        sync.Mutex
+	src       oauth2.TokenSource
+	cfg       *Config
+	lastTok   *oauth2.Token
+	errLogger func(format string, args ...any)
 }
 
 func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
@@ -116,7 +124,9 @@ func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 
 	if p.lastTok == nil || tok.AccessToken != p.lastTok.AccessToken {
 		if err := p.cfg.SetToken(tok); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to save refreshed Spotify token: %v\n", err)
+			if p.errLogger != nil {
+				p.errLogger("warning: failed to save refreshed Spotify token: %v\n", err)
+			}
 		} else {
 			p.lastTok = tok
 		}
