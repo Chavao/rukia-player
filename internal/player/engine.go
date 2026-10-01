@@ -2,16 +2,11 @@ package player
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	librespot "github.com/devgianlu/go-librespot"
 	"github.com/devgianlu/go-librespot/daemon"
@@ -22,141 +17,10 @@ const (
 	DefaultMediaName  = "rukia Spotify Player"
 )
 
-// FileStateStore manages persistent librespot credentials and state.
-type FileStateStore struct {
-	mu       sync.Mutex
-	state    *librespot.AppState
-	cacheDir string
-}
-
-// NewFileStateStore creates a state store targeting cacheDir.
-func NewFileStateStore(cacheDir string) *FileStateStore {
-	return &FileStateStore{cacheDir: cacheDir}
-}
-
-// Load retrieves stored application state and cached Spotify credentials.
-func (s *FileStateStore) Load() (*librespot.AppState, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.state != nil {
-		return s.state, nil
-	}
-
-	state := &librespot.AppState{}
-
-	// Generate deterministic 40-char hex device ID
-	hasher := sha1.New()
-	hasher.Write([]byte("rukia-player-device-" + s.cacheDir))
-	state.DeviceId = hex.EncodeToString(hasher.Sum(nil))
-
-	// Search for credentials in rukia cache, then fallback candidates.
-	candidatePaths := []string{
-		filepath.Join(s.cacheDir, "credentials.json"),
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		rukiaCache := filepath.Join(home, ".cache", "rukia", "librespot", "credentials.json")
-		if filepath.Clean(rukiaCache) != filepath.Clean(filepath.Join(s.cacheDir, "credentials.json")) {
-			candidatePaths = append(candidatePaths, rukiaCache)
-		}
-		// NOTE: External client cache migration fallback.
-		// Rukia checks ncspot's cache (~/.cache/ncspot/librespot/credentials.json)
-		// as a fallback to allow users transitioning from ncspot to reuse credentials.
-		ncspotCache := filepath.Join(home, ".cache", "ncspot", "librespot", "credentials.json")
-		candidatePaths = append(candidatePaths, ncspotCache)
-	}
-
-	for _, p := range candidatePaths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var raw struct {
-			Username string `json:"username"`
-			AuthData string `json:"auth_data"`
-		}
-		if err := json.Unmarshal(data, &raw); err != nil {
-			continue
-		}
-		blob, err := base64.StdEncoding.DecodeString(raw.AuthData)
-		if err != nil {
-			continue
-		}
-		state.Credentials.Username = raw.Username
-		state.Credentials.Data = blob
-		break
-	}
-
-	s.state = state
-	return s.state, nil
-}
-
-// Save stores application state and credentials back to disk.
-func (s *FileStateStore) Save(state *librespot.AppState) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.state = state
-
-	if len(state.Credentials.Data) == 0 {
-		return nil
-	}
-
-	if err := os.MkdirAll(s.cacheDir, 0700); err != nil {
-		return err
-	}
-
-	raw := struct {
-		AuthType int    `json:"auth_type"`
-		Username string `json:"username"`
-		AuthData string `json:"auth_data"`
-	}{
-		AuthType: 1,
-		Username: state.Credentials.Username,
-		AuthData: base64.StdEncoding.EncodeToString(state.Credentials.Data),
-	}
-
-	data, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	credPath := filepath.Join(s.cacheDir, "credentials.json")
-	if err := os.WriteFile(credPath, data, 0600); err != nil {
-		return err
-	}
-	return os.Chmod(credPath, 0600)
-}
-
-// MemoryStateStore satisfies state persistence for unit testing.
-type MemoryStateStore struct {
-	mu    sync.Mutex
-	state *librespot.AppState
-}
-
-// Load retrieves in-memory application state.
-func (m *MemoryStateStore) Load() (*librespot.AppState, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.state == nil {
-		m.state = &librespot.AppState{}
-		hasher := sha1.New()
-		hasher.Write([]byte("rukia-memory-state-store"))
-		m.state.DeviceId = hex.EncodeToString(hasher.Sum(nil))
-	}
-	return m.state, nil
-}
-
-// Save stores in-memory application state.
-func (m *MemoryStateStore) Save(s *librespot.AppState) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.state = s
-	return nil
-}
-
 // Engine manages the embedded go-librespot player daemon and PulseAudio output.
 type Engine struct {
 	deviceName string
+	deviceID   string
 	app        *daemon.App
 	cancel     context.CancelFunc
 	errCh      chan error
@@ -167,14 +31,18 @@ type Engine struct {
 }
 
 // NewEngine creates a new player engine instance.
-func NewEngine(deviceName string) *Engine {
+func NewEngine(deviceName string, options ...EngineOption) *Engine {
 	if deviceName == "" {
 		deviceName = DefaultDeviceName
 	}
-	return &Engine{
+	engine := &Engine{
 		deviceName: deviceName,
 		volume:     100,
 	}
+	for _, option := range options {
+		option(engine)
+	}
+	return engine
 }
 
 // DeviceName returns the advertised audio device / application name.
@@ -191,15 +59,25 @@ func (e *Engine) Start(parentCtx context.Context, username, accessToken string) 
 		return errors.New("player engine is already running")
 	}
 
+	if err := validateDeviceID(e.deviceID); err != nil {
+		return err
+	}
+
 	if username == "" || accessToken == "" {
 		return errors.New("username and access token are required to start audio engine")
 	}
 
-	// Set PulseAudio properties so pavucontrol-qt and PipeWire show "rukia"
-	_ = os.Setenv("PULSE_PROP_application.name", e.deviceName)
-	_ = os.Setenv("PULSE_PROP_application.process.binary", "rukia")
-	_ = os.Setenv("PULSE_PROP_media.role", "music")
-	_ = os.Setenv("PULSE_PROP_media.name", DefaultMediaName)
+	// Set PulseAudio properties so pavucontrol-qt and PipeWire show "rukia".
+	for key, value := range map[string]string{
+		"PULSE_PROP_application.name":           e.deviceName,
+		"PULSE_PROP_application.process.binary": "rukia",
+		"PULSE_PROP_media.role":                 "music",
+		"PULSE_PROP_media.name":                 DefaultMediaName,
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("setting PulseAudio property %s: %w", key, err)
+		}
+	}
 
 	cacheDir := defaultCacheDir()
 
@@ -220,7 +98,7 @@ func (e *Engine) Start(parentCtx context.Context, username, accessToken string) 
 		},
 	}
 
-	store := NewFileStateStore(cacheDir)
+	store := NewFileStateStore(cacheDir, e.deviceID)
 	app, err := daemon.New(&daemon.Options{
 		Logger:     &librespot.NullLogger{},
 		Config:     dCfg,
@@ -248,6 +126,9 @@ func (e *Engine) startRun(ctx context.Context, cancel context.CancelFunc, app *d
 
 	go func() {
 		err := run(ctx)
+		// Run owns daemon resource cleanup on cancellation, including an early
+		// Run failure. Do not race the daemon's own Close with a second call.
+		cancel()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			select {
 			case errCh <- err:
@@ -301,35 +182,6 @@ func (e *Engine) Running() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.running
-}
-
-// Close gracefully stops the player daemon and releases audio resources.
-func (e *Engine) Close() error {
-	e.mu.Lock()
-	cancel := e.cancel
-	app := e.app
-	e.cancel = nil
-	e.app = nil
-	e.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-
-	if app != nil {
-		done := make(chan struct{})
-		go func() {
-			_ = app.Close()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-		}
-	}
-
-	return nil
 }
 
 // defaultCacheDir resolves the directory for librespot daemon state and cache.
