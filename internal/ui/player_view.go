@@ -4,15 +4,24 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/Chavao/rukia-player/internal/spotify"
 	"github.com/Chavao/rukia-player/internal/util"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // RenderHeader renders the top status bar matching Image 2.
 func RenderHeader(userName string, playlist *spotify.Playlist, width int) string {
-	if playlist == nil {
+	if playlist == nil || width <= 0 {
 		return ""
+	}
+
+	centerText := playlist.Name
+	center := HeaderAccentStyle.Render(centerText)
+	centerW := lipgloss.Width(center)
+
+	// If width is very narrow, render only the playlist name truncated to width
+	if width < 30 {
+		return HeaderAccentStyle.Render(truncateString(centerText, width))
 	}
 
 	leftText := fmt.Sprintf("< Library of %s", userName)
@@ -20,29 +29,30 @@ func RenderHeader(userName string, playlist *spotify.Playlist, width int) string
 		leftText = "< Library"
 	}
 	left := HeaderLibraryStyle.Render(leftText)
-
-	center := HeaderAccentStyle.Render(playlist.Name)
+	leftW := lipgloss.Width(left)
 
 	durationStr := util.FormatPlaylistDuration(playlist.TotalDuration)
 	rightText := fmt.Sprintf("%d tracks, %s", playlist.TotalTracks, durationStr)
 	right := HeaderInfoStyle.Render(rightText)
-
-	leftW := lipgloss.Width(left)
-	centerW := lipgloss.Width(center)
 	rightW := lipgloss.Width(right)
 
-	gap := (width - leftW - rightW - centerW) / 2
-	if gap < 1 {
-		gap = 1
+	// If terminal cannot fit all three sections, drop right metadata
+	if width < leftW+centerW+rightW+2 {
+		if width < leftW+centerW+1 {
+			// Compact mode: show only playlist name truncated to available width
+			return HeaderAccentStyle.Render(truncateString(centerText, width))
+		}
+		// Medium width: show left and center
+		gap := max(1, width-leftW-centerW)
+		return left + strings.Repeat(" ", gap) + center
 	}
 
-	paddingLeft := strings.Repeat(" ", gap)
-	paddingRight := strings.Repeat(" ", width-leftW-rightW-centerW-gap)
-	if len(paddingRight) < 1 {
-		paddingRight = " "
-	}
+	// Normal width: three areas (left, center, right)
+	rem := width - leftW - rightW - centerW
+	gapLeft := max(1, rem/2)
+	gapRight := max(1, rem-gapLeft)
 
-	return left + paddingLeft + center + paddingRight + right
+	return left + strings.Repeat(" ", gapLeft) + center + strings.Repeat(" ", gapRight) + right
 }
 
 // RenderTrackTable renders the scrollable list of tracks with three columns.
@@ -119,7 +129,7 @@ func RenderTrackTable(tracks []spotify.Track, cursor int, playingIdx int, width 
 }
 
 // RenderBottomBar renders the player progress bar and metadata matching Image 2.
-func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, isPlaying bool, repeatMode string, width int) string {
+func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, isPlaying bool, shuffle bool, repeatMode string, width int, errStr ...string) string {
 	if width <= 0 {
 		return ""
 	}
@@ -142,15 +152,25 @@ func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, is
 	barStyled := ProgressBarFilled.Render(bar)
 
 	// Line 2: Details
-	// Left: Track name
-	// Right: [R] 0:00 / 3:00 [100%]
+	// Left: Error message if present, otherwise Track name
+	// Right: [S][R] ▶ 0:00 / 3:00 [100%]
 	repIcon := " "
 	if repeatMode != "off" && repeatMode != "" {
 		repIcon = "R"
 	}
+	shufIcon := " "
+	if shuffle {
+		shufIcon = "S"
+	}
+	playIcon := "⏸"
+	if isPlaying {
+		playIcon = "▶"
+	}
 
-	statusRight := fmt.Sprintf("[%s] %s / %s [%d%%]",
+	statusRight := fmt.Sprintf("[%s] [%s] %s %s / %s [%d%%]",
+		shufIcon,
 		repIcon,
+		playIcon,
 		util.FormatDuration(progressMs),
 		util.FormatDuration(totalMs),
 		volume,
@@ -163,8 +183,15 @@ func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, is
 	if leftMaxW < 10 {
 		leftMaxW = 10
 	}
-	trackTitle = truncateString(trackTitle, leftMaxW)
-	leftStyled := BottomTrackStyle.Render(trackTitle)
+
+	var leftStyled string
+	if len(errStr) > 0 && errStr[0] != "" {
+		errDisplay := truncateString("⚠ "+errStr[0], leftMaxW)
+		leftStyled = BottomErrorStyle.Render(errDisplay)
+	} else {
+		trackTitle = truncateString(trackTitle, leftMaxW)
+		leftStyled = BottomTrackStyle.Render(trackTitle)
+	}
 
 	leftW := lipgloss.Width(leftStyled)
 	gapW := width - leftW - rightW

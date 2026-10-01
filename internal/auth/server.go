@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"html"
 	"math/big"
 	"net"
 	"net/http"
@@ -24,7 +25,14 @@ type CallbackResult struct {
 	Error error
 }
 
-// GenerateSelfSignedCert generates an in-memory TLS certificate for 127.0.0.1 / localhost.
+// CallbackServer exposes the callback result and listener lifecycle.
+type CallbackServer struct {
+	Results <-chan CallbackResult
+	Addr    string
+	Done    <-chan struct{}
+}
+
+// GenerateSelfSignedCert generates an in-memory TLS certificate for loopback hosts.
 func GenerateSelfSignedCert() (tls.Certificate, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -51,7 +59,7 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		DNSNames:              []string{"localhost"},
 	}
 
@@ -73,35 +81,80 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 
 // StartHTTPSCallbackServer starts a background HTTPS server to capture the Spotify OAuth callback.
 func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-chan CallbackResult, error) {
+	callback, err := StartCallbackServer(ctx, redirectURLStr)
+	if err != nil {
+		return nil, err
+	}
+	return callback.Results, nil
+}
+
+// StartHTTPSCallbackServerWithAddr starts a background HTTPS or HTTP server to capture the Spotify OAuth callback
+// and returns the result channel and the bound listener address (useful for dynamic port allocation with :0).
+func StartHTTPSCallbackServerWithAddr(ctx context.Context, redirectURLStr string) (<-chan CallbackResult, string, error) {
+	callback, err := StartCallbackServer(ctx, redirectURLStr)
+	if err != nil {
+		return nil, "", err
+	}
+	return callback.Results, callback.Addr, nil
+}
+
+// StartCallbackServer starts the callback listener and exposes its termination.
+func StartCallbackServer(ctx context.Context, redirectURLStr string) (*CallbackServer, error) {
 	u, err := url.Parse(redirectURLStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid redirect URI: %w", err)
 	}
 
-	hostPort := u.Host
-	if !hasPort(hostPort) {
+	hostname := u.Hostname()
+	if hostname != "127.0.0.1" && hostname != "::1" {
+		return nil, fmt.Errorf("insecure redirect URI host: %s; Spotify requires loopback IP (127.0.0.1 or ::1)", hostname)
+	}
+
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, fmt.Errorf("unsupported redirect URI scheme: %s; must be http or https", u.Scheme)
+	}
+
+	port := u.Port()
+	if port == "" {
 		if u.Scheme == "https" {
-			hostPort = net.JoinHostPort(hostPort, "443")
+			port = "443"
 		} else {
-			hostPort = net.JoinHostPort(hostPort, "80")
+			port = "80"
+		}
+	}
+	hostPort := net.JoinHostPort(hostname, port)
+
+	var listener net.Listener
+	if u.Scheme == "https" {
+		cert, err := GenerateSelfSignedCert()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate TLS cert: %w", err)
+		}
+
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+
+		listener, err = tls.Listen("tcp", hostPort, tlsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
+		}
+	} else {
+		listener, err = net.Listen("tcp", hostPort)
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
 		}
 	}
 
-	cert, err := GenerateSelfSignedCert()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate TLS cert: %w", err)
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-
-	listener, err := tls.Listen("tcp", hostPort, tlsConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on %s: %w", hostPort, err)
-	}
-
 	resultCh := make(chan CallbackResult, 1)
+	doneCh := make(chan struct{})
+	serveDone := make(chan struct{})
+	publish := func(result CallbackResult) {
+		select {
+		case resultCh <- result:
+		default:
+		}
+	}
 
 	mux := http.NewServeMux()
 	server := &http.Server{
@@ -116,6 +169,8 @@ func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-cha
 	}
 
 	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		// Browser response writes are best effort: disconnecting the browser
+		// must not discard an OAuth result already received by this handler.
 		query := r.URL.Query()
 		authError := query.Get("error")
 		code := query.Get("code")
@@ -125,49 +180,62 @@ func StartHTTPSCallbackServer(ctx context.Context, redirectURLStr string) (<-cha
 
 		if authError != "" {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #ff6b6b; padding: 40px; text-align: center;"><h2>Authentication Failed</h2><p>%s</p><p>You may close this tab.</p></body></html>`, authError)
-			resultCh <- CallbackResult{
+			escapedErr := html.EscapeString(authError)
+			fmt.Fprintf(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #ff6b6b; padding: 40px; text-align: center;"><h2>Authentication Failed</h2><p>%s</p><p>You may close this tab.</p></body></html>`, escapedErr)
+			publish(CallbackResult{
 				Error: fmt.Errorf("spotify auth error: %s", authError),
 				State: state,
-			}
+			})
 			return
 		}
 
 		if code == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #ff6b6b; padding: 40px; text-align: center;"><h2>Invalid Request</h2><p>Missing authorization code.</p></body></html>`)
-			resultCh <- CallbackResult{
+			publish(CallbackResult{
 				Error: errors.New("missing authorization code in callback"),
 				State: state,
-			}
+			})
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `<!DOCTYPE html><html><body style="font-family: sans-serif; background: #0f141c; color: #00e5ff; padding: 40px; text-align: center;"><h2>Authentication Successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>`)
 
-		resultCh <- CallbackResult{
+		publish(CallbackResult{
 			Code:  code,
 			State: state,
-		}
+		})
 	})
 
 	go func() {
-		_ = server.Serve(listener)
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			publish(CallbackResult{Error: fmt.Errorf("callback server failed: %w", err)})
+		}
+		close(serveDone)
 	}()
 
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-		_ = listener.Close()
+		select {
+		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				publish(CallbackResult{Error: fmt.Errorf("callback server shutdown failed: %w", err)})
+				// Shutdown leaves active connections open on timeout. Close them
+				// before Done so an incomplete browser request cannot outlive login.
+				if err := server.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+					publish(CallbackResult{Error: fmt.Errorf("callback server close failed: %w", err)})
+				}
+			}
+			cancel()
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				publish(CallbackResult{Error: fmt.Errorf("callback listener close failed: %w", err)})
+			}
+		case <-serveDone:
+		}
+		<-serveDone
+		close(doneCh)
 	}()
 
-	return resultCh, nil
-}
-
-func hasPort(host string) bool {
-	_, _, err := net.SplitHostPort(host)
-	return err == nil
+	return &CallbackServer{Results: resultCh, Addr: listener.Addr().String(), Done: doneCh}, nil
 }

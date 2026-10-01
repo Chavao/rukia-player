@@ -54,6 +54,10 @@ var (
 				Foreground(ColorCyan).
 				Bold(true)
 
+	BottomErrorStyle = lipgloss.NewStyle().
+				Foreground(ColorError).
+				Bold(true)
+
 	BottomStatusStyle = lipgloss.NewStyle().
 				Foreground(ColorDimCyan)
 

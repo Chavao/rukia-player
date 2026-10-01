@@ -1,12 +1,52 @@
 package auth
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"golang.org/x/oauth2"
 )
+
+func TestPKCETokenRemovesStoredClientSecret(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := DefaultConfig()
+	cfg.ClientID = "client-id"
+	cfg.ClientSecret = "old-secret"
+	if err := cfg.SetPKCEToken(&oauth2.Token{AccessToken: "pkce-access"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AuthFlow != "pkce" || loaded.ClientSecret != "" || loaded.Token.AccessToken != "pkce-access" {
+		t.Fatalf("PKCE migration failed: flow=%q secret=%q token=%v", loaded.AuthFlow, loaded.ClientSecret, loaded.Token)
+	}
+	path, err := GetConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]json.RawMessage
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := saved["client_secret"]; ok {
+		t.Fatal("PKCE config still stores client secret")
+	}
+}
+
+func TestClientIDIsSufficientForSetup(t *testing.T) {
+	if !(&Config{ClientID: "client-id"}).HasCredentials() {
+		t.Fatal("PKCE setup should require only the Client ID")
+	}
+}
 
 func TestConfigLoadAndSave(t *testing.T) {
 	tempDir := t.TempDir()
@@ -84,5 +124,81 @@ func TestConfigEnvOverrides(t *testing.T) {
 	}
 	if !cfg.HasCredentials() {
 		t.Error("expected HasCredentials to be true with env overrides")
+	}
+}
+
+func TestConfigZeroVolumeMute(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tempDir)
+
+	cfg := DefaultConfig()
+	cfg.Volume = 0
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("failed to save config: %v", err)
+	}
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if loaded.Volume != 0 {
+		t.Errorf("expected volume 0 (mute) to be preserved, got %d", loaded.Volume)
+	}
+}
+
+func TestConfigSaveEnforcesChmodExistingFile(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tempDir)
+
+	configDir := filepath.Join(tempDir, configDirName)
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	cfgPath := filepath.Join(configDir, configFileName)
+
+	// Pre-create file with permissive mode 0644
+	if err := os.WriteFile(cfgPath, []byte("{}"), 0644); err != nil {
+		t.Fatalf("failed to write insecure file: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("failed to save config: %v", err)
+	}
+
+	fi, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("failed to stat config file: %v", err)
+	}
+	if fi.Mode().Perm() != 0600 {
+		t.Errorf("expected mode 0600 after Save on existing 0644 file, got %v", fi.Mode().Perm())
+	}
+}
+
+func TestConcurrentVolumeAndTokenPersistence(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := DefaultConfig()
+	var wg sync.WaitGroup
+	var volumeErr, tokenErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		volumeErr = cfg.SetVolume(35)
+	}()
+	go func() {
+		defer wg.Done()
+		tokenErr = cfg.SetToken(&oauth2.Token{AccessToken: "test-token"})
+	}()
+	wg.Wait()
+	if volumeErr != nil || tokenErr != nil {
+		t.Fatalf("persisting config: volume=%v token=%v", volumeErr, tokenErr)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Volume != 35 || loaded.Token == nil || loaded.Token.AccessToken != "test-token" {
+		t.Fatalf("concurrent updates were lost: volume=%d token=%v", loaded.Volume, loaded.Token)
 	}
 }

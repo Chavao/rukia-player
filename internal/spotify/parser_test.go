@@ -58,6 +58,24 @@ func TestParsePlaylistID(t *testing.T) {
 			wantErr:  true,
 		},
 		{
+			name:     "open.spotify.com url uppercase",
+			input:    "https://OPEN.SPOTIFY.COM/playlist/6UUCMxk575eDTwSWa0qQhB",
+			expected: "6UUCMxk575eDTwSWa0qQhB",
+			wantErr:  false,
+		},
+		{
+			name:     "arbitrary domain url with playlist path",
+			input:    "https://attacker.com/playlist/6UUCMxk575eDTwSWa0qQhB",
+			expected: "",
+			wantErr:  true,
+		},
+		{
+			name:     "other domain with open.spotify.com as subdomain prefix",
+			input:    "https://open.spotify.com.attacker.com/playlist/6UUCMxk575eDTwSWa0qQhB",
+			expected: "",
+			wantErr:  true,
+		},
+		{
 			name:     "too short ID",
 			input:    "abc123",
 			expected: "",

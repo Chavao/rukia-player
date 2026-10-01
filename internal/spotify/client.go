@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -90,7 +89,7 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*UserProfile, error) {
 		return nil, err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user profile: %w", err)
 	}
@@ -116,7 +115,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 		return nil, err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get playlist: %w", err)
 	}
@@ -182,12 +181,13 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 			return nil, err
 		}
 
-		tResp, err := c.httpClient.Do(tReq)
+		tResp, err := c.do(tReq)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch tracks page: %w", err)
 		}
 
-		if tResp.StatusCode == http.StatusNotFound || tResp.StatusCode == http.StatusForbidden {
+		// A 403 from /items is a permission denial, not a signal to try /tracks.
+		if tResp.StatusCode == http.StatusNotFound {
 			tResp.Body.Close()
 			// Fallback to legacy /tracks endpoint
 			legacyEndpoint := fmt.Sprintf("%s/playlists/%s/tracks?limit=%d&offset=%d", c.endpointBase(), playlistID, limit, offset)
@@ -195,7 +195,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 			if lErr != nil {
 				return nil, lErr
 			}
-			tResp, err = c.httpClient.Do(tReqLegacy)
+			tResp, err = c.do(tReqLegacy)
 			if err != nil {
 				return nil, fmt.Errorf("failed to fetch legacy tracks page: %w", err)
 			}
@@ -264,7 +264,7 @@ func (c *Client) GetDevices(ctx context.Context) ([]Device, error) {
 		return nil, err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get devices: %w", err)
 	}
@@ -298,7 +298,7 @@ func (c *Client) TransferPlayback(ctx context.Context, deviceID string, play boo
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to transfer playback: %w", err)
 	}
@@ -328,7 +328,7 @@ func (c *Client) PlayPlaylist(ctx context.Context, deviceID string, playlistURI 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to start playlist playback: %w", err)
 	}
@@ -349,7 +349,7 @@ func (c *Client) Resume(ctx context.Context, deviceID string) error {
 		return err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to resume playback: %w", err)
 	}
@@ -370,7 +370,7 @@ func (c *Client) Pause(ctx context.Context, deviceID string) error {
 		return err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to pause playback: %w", err)
 	}
@@ -397,7 +397,7 @@ func (c *Client) SetVolume(ctx context.Context, deviceID string, volumePercent i
 		return err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to set volume: %w", err)
 	}
@@ -418,7 +418,7 @@ func (c *Client) SetShuffle(ctx context.Context, deviceID string, state bool) er
 		return err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to set shuffle: %w", err)
 	}
@@ -439,7 +439,7 @@ func (c *Client) SetRepeat(ctx context.Context, deviceID string, state string) e
 		return err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to set repeat: %w", err)
 	}
@@ -455,7 +455,7 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 		return nil, err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get playback state: %w", err)
 	}
@@ -520,25 +520,71 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 	return state, nil
 }
 
-func checkError(resp *http.Response) error {
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	if req.Method != http.MethodGet {
+		return c.httpClient.Do(req)
 	}
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	var apiErr struct {
-		Error struct {
-			Status  int    `json:"status"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal(bodyBytes, &apiErr); err == nil && apiErr.Error.Message != "" {
-		if apiErr.Error.Status == http.StatusForbidden && strings.Contains(strings.ToLower(apiErr.Error.Message), "premium") {
-			return errors.New("spotify Premium is required for playback control")
+	maxAttempts := 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if req.Context().Err() != nil || attempt == maxAttempts-1 {
+				return nil, err
+			}
+			backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
+			select {
+			case <-time.After(backoff):
+				continue
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
 		}
-		return fmt.Errorf("spotify API error (%d): %s", apiErr.Error.Status, apiErr.Error.Message)
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			var retryAfter time.Duration
+			if h := resp.Header.Get("Retry-After"); h != "" {
+				if sec, parseErr := strconv.ParseInt(h, 10, 64); parseErr == nil && sec > 0 && sec <= (1<<63-1)/int64(time.Second) {
+					retryAfter = time.Duration(sec) * time.Second
+				}
+			}
+			if retryAfter == 0 {
+				retryAfter = time.Duration(200*(1<<attempt)) * time.Millisecond
+			}
+
+			if attempt == maxAttempts-1 {
+				return resp, nil
+			}
+
+			resp.Body.Close()
+			timer := time.NewTimer(retryAfter)
+			select {
+			case <-timer.C:
+				continue
+			case <-req.Context().Done():
+				timer.Stop()
+				return nil, req.Context().Err()
+			}
+		}
+
+		if resp.StatusCode == http.StatusBadGateway ||
+			resp.StatusCode == http.StatusServiceUnavailable ||
+			resp.StatusCode == http.StatusGatewayTimeout {
+			if attempt == maxAttempts-1 {
+				return resp, nil
+			}
+			resp.Body.Close()
+			backoff := time.Duration(150*(1<<attempt)) * time.Millisecond
+			select {
+			case <-time.After(backoff):
+				continue
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+		}
+
+		return resp, nil
 	}
 
-	return fmt.Errorf("spotify API HTTP error %d: %s", resp.StatusCode, string(bodyBytes))
+	return c.httpClient.Do(req)
 }
