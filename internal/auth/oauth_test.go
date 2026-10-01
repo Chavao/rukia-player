@@ -361,11 +361,13 @@ func TestPersistingTokenSourceErrorLogger(t *testing.T) {
 		loggedWarnings <- fmt.Sprintf(format, args...)
 	})
 
-	initialTok := &oauth2.Token{AccessToken: "token-1", Expiry: time.Now().Add(time.Hour)}
+	initialTok := &oauth2.Token{AccessToken: "token-1", Expiry: time.Now().Add(-time.Hour)}
 	newTok := &oauth2.Token{AccessToken: "token-2", Expiry: time.Now().Add(time.Hour)}
 
 	pts := &persistingTokenSource{
-		src:       &staticTokenSource{tok: newTok},
+		flow:      flow,
+		parent:    context.Background(),
+		source:    func(context.Context, *oauth2.Token) oauth2.TokenSource { return &staticTokenSource{tok: newTok} },
 		saveToken: cfg.SetToken,
 		lastTok:   initialTok,
 		warn:      flow.warnings.publish,

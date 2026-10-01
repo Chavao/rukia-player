@@ -65,7 +65,9 @@ func TestWarningSinkCannotBlockTokenRefresh(t *testing.T) {
 	flow.SetWarningSink(func(error) { close(entered); <-release })
 	_, source := flow.Client(context.Background(), nil)
 	pts := source.(*persistingTokenSource)
-	pts.src = &staticTokenSource{tok: &oauth2.Token{AccessToken: "refreshed"}}
+	pts.source = func(context.Context, *oauth2.Token) oauth2.TokenSource {
+		return &staticTokenSource{tok: &oauth2.Token{AccessToken: "refreshed"}}
+	}
 	pts.saveToken = func(*oauth2.Token) error { return errors.New("cannot save") }
 	finished := make(chan error, 1)
 	go func() { _, err := pts.Token(); finished <- err }()
@@ -120,17 +122,26 @@ func TestWarningQueuePreservesLatestWithoutConsumer(t *testing.T) {
 func TestPersistingTokenSourceSavesTokenRotationOnce(t *testing.T) {
 	for _, fails := range []bool{false, true} {
 		t.Run(fmt.Sprintf("persistence_failure=%v", fails), func(t *testing.T) {
-			initial := &oauth2.Token{AccessToken: "same-access", RefreshToken: "old-refresh", Expiry: time.Now().Add(time.Hour)}
+			initial := &oauth2.Token{AccessToken: "same-access", RefreshToken: "old-refresh", Expiry: time.Now().Add(-time.Hour)}
 			rotated := *initial
 			rotated.RefreshToken = "rotated-refresh"
+			rotated.Expiry = time.Now().Add(time.Hour)
 			var saves int
-			pts := &persistingTokenSource{src: &staticTokenSource{tok: &rotated}, lastTok: initial, saveToken: func(*oauth2.Token) error {
-				saves++
-				if fails {
-					return errors.New("disk unavailable")
-				}
-				return nil
-			}}
+			flow := NewOAuthFlow(DefaultConfig())
+			current := &rotated
+			pts := &persistingTokenSource{
+				flow:    flow,
+				parent:  context.Background(),
+				lastTok: initial,
+				source:  func(context.Context, *oauth2.Token) oauth2.TokenSource { return &staticTokenSource{tok: current} },
+				saveToken: func(*oauth2.Token) error {
+					saves++
+					if fails {
+						return errors.New("disk unavailable")
+					}
+					return nil
+				},
+			}
 			for i := 0; i < 3; i++ {
 				if _, err := pts.Token(); err != nil {
 					t.Fatal(err)
@@ -141,7 +152,10 @@ func TestPersistingTokenSourceSavesTokenRotationOnce(t *testing.T) {
 			}
 			newer := rotated
 			newer.Expiry = rotated.Expiry.Add(time.Hour)
-			pts.src = &staticTokenSource{tok: &newer}
+			current = &newer
+			pts.mu.Lock()
+			pts.lastTok.Expiry = time.Now().Add(-time.Hour)
+			pts.mu.Unlock()
 			if _, err := pts.Token(); err != nil {
 				t.Fatal(err)
 			}
