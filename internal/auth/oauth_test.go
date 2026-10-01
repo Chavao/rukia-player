@@ -3,10 +3,12 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,5 +143,198 @@ func TestSpotifyScopesLeastPrivilege(t *testing.T) {
 		if sc == "user-library-read" {
 			t.Errorf("found unused scope 'user-library-read'")
 		}
+	}
+}
+
+func TestEnsureTokenValid(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	validToken := &oauth2.Token{
+		AccessToken:  "valid-access-token",
+		RefreshToken: "refresh-token",
+		Expiry:       time.Now().Add(1 * time.Hour),
+	}
+	cfg := &Config{
+		ClientID: "test-client",
+		Token:    validToken,
+	}
+	flow := NewOAuthFlow(cfg)
+	loginCalled := false
+	flow.loginFn = func(ctx context.Context) (*oauth2.Token, error) {
+		loginCalled = true
+		return nil, errors.New("login should not be called")
+	}
+
+	tok, err := flow.EnsureToken(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok.AccessToken != validToken.AccessToken {
+		t.Fatalf("expected token %s, got %s", validToken.AccessToken, tok.AccessToken)
+	}
+	if loginCalled {
+		t.Fatal("interactive login was unexpectedly called for valid token")
+	}
+}
+
+func TestEnsureTokenMissingOrNoRefreshToken(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	tests := []struct {
+		name  string
+		token *oauth2.Token
+	}{
+		{"nil token", nil},
+		{"empty refresh token", &oauth2.Token{AccessToken: "expired", RefreshToken: "", Expiry: time.Now().Add(-time.Hour)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				ClientID: "test-client",
+				Token:    tt.token,
+			}
+			flow := NewOAuthFlow(cfg)
+			expectedTok := &oauth2.Token{AccessToken: "interactive-token", RefreshToken: "new-refresh"}
+			loginCalled := false
+			flow.loginFn = func(ctx context.Context) (*oauth2.Token, error) {
+				loginCalled = true
+				return expectedTok, nil
+			}
+
+			tok, err := flow.EnsureToken(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !loginCalled {
+				t.Fatal("expected interactive login to be called")
+			}
+			if tok.AccessToken != expectedTok.AccessToken {
+				t.Fatalf("expected token %s, got %s", expectedTok.AccessToken, tok.AccessToken)
+			}
+		})
+	}
+}
+
+func TestEnsureTokenExpiredSuccess(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = r.ParseForm()
+		if r.Form.Get("grant_type") != "refresh_token" {
+			t.Errorf("unexpected grant_type: %s", r.Form.Get("grant_type"))
+		}
+		fmt.Fprint(w, `{"access_token":"new-access-token","refresh_token":"new-refresh-token","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ClientID: "test-client",
+		Token: &oauth2.Token{
+			AccessToken:  "old-expired-token",
+			RefreshToken: "old-refresh-token",
+			Expiry:       time.Now().Add(-1 * time.Hour),
+		},
+	}
+	flow := NewOAuthFlow(cfg)
+	flow.config.Endpoint.TokenURL = server.URL
+
+	loginCalled := false
+	flow.loginFn = func(ctx context.Context) (*oauth2.Token, error) {
+		loginCalled = true
+		return nil, errors.New("login should not be called")
+	}
+
+	tok, err := flow.EnsureToken(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if loginCalled {
+		t.Fatal("interactive login was unexpectedly called when refresh succeeded")
+	}
+	if tok.AccessToken != "new-access-token" {
+		t.Fatalf("expected new-access-token, got %s", tok.AccessToken)
+	}
+	if cfg.CurrentToken().AccessToken != "new-access-token" {
+		t.Fatalf("expected config to be updated with new token, got %s", cfg.CurrentToken().AccessToken)
+	}
+}
+
+func TestEnsureTokenExpiredRevoked(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid_grant","error_description":"Refresh token revoked"}`)
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		ClientID: "test-client",
+		Token: &oauth2.Token{
+			AccessToken:  "expired-token",
+			RefreshToken: "revoked-refresh-token",
+			Expiry:       time.Now().Add(-1 * time.Hour),
+		},
+	}
+	flow := NewOAuthFlow(cfg)
+	flow.config.Endpoint.TokenURL = server.URL
+
+	loginCalled := false
+	interactiveTok := &oauth2.Token{AccessToken: "re-authenticated-token"}
+	flow.loginFn = func(ctx context.Context) (*oauth2.Token, error) {
+		loginCalled = true
+		return interactiveTok, nil
+	}
+
+	tok, err := flow.EnsureToken(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !loginCalled {
+		t.Fatal("expected interactive login fallback when token is revoked")
+	}
+	if tok.AccessToken != interactiveTok.AccessToken {
+		t.Fatalf("expected token %s, got %s", interactiveTok.AccessToken, tok.AccessToken)
+	}
+}
+
+func TestEnsureTokenExpiredNetworkError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// Start and immediately close a server so connections fail
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	server.Close()
+
+	cfg := &Config{
+		ClientID: "test-client",
+		Token: &oauth2.Token{
+			AccessToken:  "expired-token",
+			RefreshToken: "any-refresh-token",
+			Expiry:       time.Now().Add(-1 * time.Hour),
+		},
+	}
+	flow := NewOAuthFlow(cfg)
+	flow.config.Endpoint.TokenURL = server.URL
+
+	loginCalled := false
+	flow.loginFn = func(ctx context.Context) (*oauth2.Token, error) {
+		loginCalled = true
+		return nil, errors.New("login should not be called")
+	}
+
+	tok, err := flow.EnsureToken(context.Background())
+	if err == nil {
+		t.Fatal("expected error due to network failure, got nil")
+	}
+	if tok != nil {
+		t.Fatalf("expected nil token on network failure, got %v", tok)
+	}
+	if loginCalled {
+		t.Fatal("interactive login should NOT be called on network failure")
+	}
+	if !strings.Contains(err.Error(), "failed to refresh Spotify session") {
+		t.Fatalf("expected error message to contain 'failed to refresh Spotify session', got: %v", err)
 	}
 }

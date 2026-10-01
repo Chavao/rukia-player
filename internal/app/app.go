@@ -86,13 +86,10 @@ func Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("credentials setup failed: %w", err)
 	}
 
-	// 4. Authenticate via OAuth 2.0 flow if no valid token
+	// 4. Authenticate via OAuth 2.0 flow
 	oauthFlow := auth.NewOAuthFlow(cfg)
-
-	if cfg.Token == nil || !cfg.Token.Valid() {
-		if _, err := oauthFlow.RunInteractiveLogin(ctx); err != nil {
-			return fmt.Errorf("spotify login failed: %w", err)
-		}
+	if _, err := oauthFlow.EnsureToken(ctx); err != nil {
+		return fmt.Errorf("spotify login failed: %w", err)
 	}
 
 	// 5. Initialize authenticated Spotify client

@@ -30,8 +30,9 @@ var SpotifyScopes = []string{
 
 // OAuthFlow handles Spotify OAuth 2.0 interactions.
 type OAuthFlow struct {
-	config *oauth2.Config
-	appCfg *Config
+	config  *oauth2.Config
+	appCfg  *Config
+	loginFn func(context.Context) (*oauth2.Token, error)
 }
 
 // NewOAuthFlow creates an initialized OAuthFlow from the application Config.
@@ -44,10 +45,12 @@ func NewOAuthFlow(cfg *Config) *OAuthFlow {
 	}
 	oauthConfig.Endpoint.AuthStyle = oauth2.AuthStyleInParams
 
-	return &OAuthFlow{
+	flow := &OAuthFlow{
 		config: oauthConfig,
 		appCfg: cfg,
 	}
+	flow.loginFn = flow.RunInteractiveLogin
+	return flow
 }
 
 // GenerateRandomState creates a cryptographically secure hex state parameter.
@@ -177,6 +180,47 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 	case <-time.After(5 * time.Minute):
 		return nil, errors.New("authentication timed out after 5 minutes")
 	}
+}
+
+// EnsureToken returns a valid OAuth token, refreshing it silently if expired,
+// or initiating an interactive browser login if no token exists or if refresh is rejected.
+func (o *OAuthFlow) EnsureToken(ctx context.Context) (*oauth2.Token, error) {
+	tok := o.appCfg.CurrentToken()
+	if tok == nil || tok.RefreshToken == "" {
+		return o.interactiveLogin(ctx)
+	}
+
+	if tok.Valid() {
+		return tok, nil
+	}
+
+	fmt.Println("Refreshing Spotify session...")
+	_, ts := o.Client(ctx, tok)
+	refreshed, err := ts.Token()
+	if err != nil {
+		var retrieveErr *oauth2.RetrieveError
+		if errors.As(err, &retrieveErr) {
+			return o.interactiveLogin(ctx)
+		}
+		return nil, fmt.Errorf("failed to refresh Spotify session: %w", err)
+	}
+
+	if refreshed.RefreshToken == "" && tok.RefreshToken != "" {
+		refreshed.RefreshToken = tok.RefreshToken
+	}
+
+	if err := o.appCfg.SetToken(refreshed); err != nil {
+		return nil, fmt.Errorf("failed to save refreshed token: %w", err)
+	}
+
+	return refreshed, nil
+}
+
+func (o *OAuthFlow) interactiveLogin(ctx context.Context) (*oauth2.Token, error) {
+	if o.loginFn != nil {
+		return o.loginFn(ctx)
+	}
+	return o.RunInteractiveLogin(ctx)
 }
 
 // OpenBrowser attempts to open a URL in the system's default browser.
