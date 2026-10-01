@@ -157,3 +157,28 @@ func TestDiscoverDeviceUsesLatestSuccessfulFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatStartupError(t *testing.T) {
+	// Rate limit error
+	apiErr := &spotify.APIError{
+		StatusCode: 429,
+		Message:    "rate limit exceeded",
+		RetryAfter: 30 * time.Second,
+	}
+	err429 := formatStartupError("profile", apiErr)
+	if !strings.Contains(err429.Error(), "Spotify rate limit reached") || !strings.Contains(err429.Error(), "30s") {
+		t.Errorf("unexpected 429 error format: %v", err429)
+	}
+
+	// Timeout error
+	timeoutErr := formatStartupError("playlist", context.DeadlineExceeded)
+	if !strings.Contains(timeoutErr.Error(), "request timed out while connecting to Spotify") {
+		t.Errorf("unexpected timeout error format: %v", timeoutErr)
+	}
+
+	// Generic error
+	genErr := formatStartupError("initialization", errors.New("network failure"))
+	if !strings.Contains(genErr.Error(), "initialization: network failure") {
+		t.Errorf("unexpected generic error format: %v", genErr)
+	}
+}

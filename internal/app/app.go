@@ -92,12 +92,17 @@ func Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("spotify login failed: %w", err)
 	}
 
+	startupCtx, cancelStartup := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelStartup()
+
 	// 5. Initialize authenticated Spotify client
 	httpClient, _ := oauthFlow.Client(ctx, cfg.CurrentToken())
 	spotifyClient := spotify.NewClient(httpClient)
 
 	// Fetch current user
-	user, err := spotifyClient.GetCurrentUser(ctx)
+	userCtx, cancelUser := context.WithTimeout(startupCtx, 5*time.Second)
+	user, err := spotifyClient.GetCurrentUser(userCtx)
+	cancelUser()
 	if err != nil {
 		var apiErr *spotify.APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
@@ -108,12 +113,14 @@ func Run(ctx context.Context, args []string) error {
 			}
 			httpClient, _ = oauthFlow.Client(ctx, cfg.CurrentToken())
 			spotifyClient = spotify.NewClient(httpClient)
-			user, err = spotifyClient.GetCurrentUser(ctx)
+			retryUserCtx, cancelRetryUser := context.WithTimeout(startupCtx, 5*time.Second)
+			user, err = spotifyClient.GetCurrentUser(retryUserCtx)
+			cancelRetryUser()
 			if err != nil {
-				return fmt.Errorf("failed to connect to Spotify: %w", err)
+				return formatStartupError("failed to connect to Spotify", err)
 			}
 		} else {
-			return fmt.Errorf("failed to connect to Spotify: %w", err)
+			return formatStartupError("failed to connect to Spotify", err)
 		}
 	}
 
@@ -129,9 +136,11 @@ func Run(ctx context.Context, args []string) error {
 
 	// 7. Fetch playlist tracks
 	fmt.Printf("Loading playlist %s...\n", playlistID)
-	playlist, err := spotifyClient.GetPlaylist(ctx, playlistID)
+	playlistCtx, cancelPlaylist := context.WithTimeout(startupCtx, 15*time.Second)
+	playlist, err := spotifyClient.GetPlaylist(playlistCtx, playlistID)
+	cancelPlaylist()
 	if err != nil {
-		return fmt.Errorf("failed to load playlist: %w", err)
+		return formatStartupError("failed to load playlist", err)
 	}
 
 	// Persist last played playlist
@@ -140,13 +149,16 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	// 8. Find target device (rukia or active device)
-	deviceCtx, cancelDeviceDiscovery := context.WithTimeout(ctx, 5*time.Second)
+	deviceCtx, cancelDeviceDiscovery := context.WithTimeout(startupCtx, 5*time.Second)
 	defer cancelDeviceDiscovery()
 	targetDeviceID := discoverDevice(deviceCtx, spotifyClient, playerEngine.DeviceName(), 8, 500*time.Millisecond)
 
 	// 9. Start initial playback
-	if err := startInitialPlayback(ctx, spotifyClient, targetDeviceID, playlist.URI); err != nil {
-		return err
+	playbackCtx, cancelPlayback := context.WithTimeout(startupCtx, 5*time.Second)
+	playbackErr := startInitialPlayback(playbackCtx, spotifyClient, targetDeviceID, playlist.URI)
+	cancelPlayback()
+	if playbackErr != nil {
+		return formatStartupError("failed to start playlist", playbackErr)
 	}
 
 	// 10. Start Bubble Tea TUI
@@ -158,6 +170,19 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+func formatStartupError(phase string, err error) error {
+	var apiErr *spotify.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.StatusCode == http.StatusTooManyRequests && apiErr.RetryAfter > 0 {
+			return fmt.Errorf("%s: Spotify rate limit reached (Retry-After: %v); please wait before retrying", phase, apiErr.RetryAfter)
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: request timed out while connecting to Spotify: %w", phase, err)
+	}
+	return fmt.Errorf("%s: %w", phase, err)
 }
 
 type deviceLister interface {
