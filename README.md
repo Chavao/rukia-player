@@ -7,7 +7,7 @@ The application compiles to the command-line binary `rukia` and starts playing a
 ## Features
 
 - **Native Terminal Playback**: Embeds a Spotify Connect receiver using `go-librespot` with PulseAudio/PipeWire audio output.
-- **Spotify Web API Integration**: OAuth 2.0 authorization code flow with PKCE, automatic token refresh, structured error parsing, and 429/5xx backoff retries.
+- **Spotify Web API Integration**: OAuth 2.0 authorization code flow with PKCE, automatic token refresh, structured error parsing, and GET retries that respect Spotify's rate limits. Playback controls retry only selected transient failures with a bounded budget.
 - **OAuth Callback Server**: Loopback-restricted callback handler with explicit listener shutdown. Existing HTTPS configurations continue to use an ephemeral in-memory TLS certificate.
 - **Flexible Playlist Arguments**: Supports raw playlist IDs, IDs with query parameters, full Spotify URLs (`open.spotify.com`), and Spotify URIs.
 - **Cyan TUI Theme**: Designed to match the Spotify CLI theme with header stats, track listing (Artist - Album, Title, Duration), shuffle/repeat badges, and bottom progress bar with transient error notices.
@@ -69,12 +69,18 @@ On first launch, if no Client ID is configured, `rukia` interactively requests:
 
 The Client ID and access and refresh tokens are stored in `~/.config/rukia/config.json` with restricted permissions (`0600`). A client secret is not needed for new PKCE logins. Existing configurations with a client secret continue to refresh legacy tokens; the stored secret is removed after a new PKCE login.
 
+Expired sessions are refreshed silently with an eight second timeout. A revoked refresh token prompts for login; rate limits, server failures, and network errors are reported without launching the browser. Token persistence warnings appear in the TUI and as a final reminder after the terminal is restored, so quitting cannot discard a warning waiting for display.
+
+Spotify Connect identity is stored as `device_id` in the same configuration. On the first launch after upgrading, Rukia saves the existing device identity derived from the current cache location. Later cache directory changes preserve that identity. An invalid stored identity is reported as a configuration error; restore a valid value or remove the field to migrate from the current cache location again.
+
 Alternatively, credentials can be provided via environment variables:
 - `SPOTIFY_CLIENT_ID`
 - `SPOTIFY_CLIENT_SECRET` (optional, for legacy token refresh)
 - `SPOTIFY_REDIRECT_URI` (optional, defaults to `http://127.0.0.1:8443/callback`)
 
 Existing configured HTTPS redirect URIs remain supported. Register the exact URI in the Spotify Developer Dashboard. Spotify requires a literal loopback IP for new redirect URI registrations.
+
+Both `127.0.0.1` and `::1` are supported for loopback callbacks, including HTTPS certificate hostnames. `localhost` redirect URIs are rejected.
 
 ## Keyboard Controls
 
