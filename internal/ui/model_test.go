@@ -233,14 +233,26 @@ func TestFailedPlaybackReconcilesRemoteStateAndPreservesNewIntent(t *testing.T) 
 	}
 }
 
-func TestLaterPollKeepsUnresolvedPlaybackIntent(t *testing.T) {
-	model := NewModel(nil, nil, nil, nil, "device")
+func TestLaterPollReconcilesFailedPlaybackIntent(t *testing.T) {
+	mock := &mockSpotifyController{
+		pauseFunc: func(context.Context, string) error { return nil },
+	}
+	model := NewModel(mock, nil, nil, nil, "device")
 	model.Update(tea.KeyMsg{Type: tea.KeySpace})
 	model.Update(playbackChangedMsg{playing: false, err: assertErr("offline")})
 	model.Update(playbackStateMsg(&spotify.PlaybackState{IsPlaying: true}))
 	model.Update(playbackStateMsg(&spotify.PlaybackState{IsPlaying: true}))
-	if model.desiredPlaying || !model.confirmedPlaying || model.isPlaying != model.confirmedPlaying {
-		t.Fatalf("later poll lost unresolved intent: desired=%v confirmed=%v visible=%v", model.desiredPlaying, model.confirmedPlaying, model.isPlaying)
+	if !model.desiredPlaying || !model.confirmedPlaying || model.isPlaying != model.confirmedPlaying {
+		t.Fatalf("failed intent was not reconciled: desired=%v confirmed=%v visible=%v", model.desiredPlaying, model.confirmedPlaying, model.isPlaying)
+	}
+
+	// Next space after failure reconciliation must trigger pause command instead of being a no-op
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd on space after reconciled failure")
+	}
+	if model.desiredPlaying != false {
+		t.Fatalf("expected desiredPlaying=false after space, got %v", model.desiredPlaying)
 	}
 }
 
@@ -265,6 +277,62 @@ func TestTogglePlayPauseCmdNoModelMutation(t *testing.T) {
 	}
 	if changedMsg.playing != false {
 		t.Errorf("expected playing=false, got %v", changedMsg.playing)
+	}
+}
+
+func TestTogglePlayPauseCmdRetriesOnTransientError(t *testing.T) {
+	attempts := 0
+	mock := &mockSpotifyController{
+		pauseFunc: func(ctx context.Context, deviceID string) error {
+			attempts++
+			if attempts < 3 {
+				return assertErr("temporary glitch")
+			}
+			return nil
+		},
+	}
+	model := NewModel(mock, nil, nil, nil, "dev-1")
+	cmd := model.togglePlayPauseCmd(false)
+	msg := cmd()
+	changedMsg, ok := msg.(playbackChangedMsg)
+	if !ok {
+		t.Fatalf("expected playbackChangedMsg, got %T", msg)
+	}
+	if changedMsg.err != nil {
+		t.Fatalf("expected success after retries, got %v", changedMsg.err)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestTogglePlayPauseCmdAbortsWhenSuperseded(t *testing.T) {
+	attempts := 0
+	var model *Model
+	mock := &mockSpotifyController{
+		pauseFunc: func(ctx context.Context, deviceID string) error {
+			attempts++
+			// Simulate user pressing Space again while retrying
+			if attempts == 1 && model != nil {
+				model.playbackVersion.Add(1)
+			}
+			return assertErr("failure")
+		},
+	}
+	model = NewModel(mock, nil, nil, nil, "dev-1")
+	model.requestedVersion = model.playbackVersion.Load()
+	cmd := model.togglePlayPauseCmd(false)
+	msg := cmd()
+	changedMsg, ok := msg.(playbackChangedMsg)
+	if !ok {
+		t.Fatalf("expected playbackChangedMsg, got %T", msg)
+	}
+	if changedMsg.err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// Should have aborted after the first attempt when superseded
+	if attempts > 2 {
+		t.Fatalf("expected early abort (<=2 attempts), got %d", attempts)
 	}
 }
 

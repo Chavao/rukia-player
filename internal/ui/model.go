@@ -21,6 +21,7 @@ type playbackStateMsg *spotify.PlaybackState
 type playerErrorMsg struct{ err error }
 type errMsg struct{ err error }
 type playbackChangedMsg struct {
+	version uint64
 	playing bool
 	err     error
 }
@@ -75,7 +76,7 @@ type Model struct {
 	desiredPlaying    bool
 	playbackPending   bool
 	playbackReconcile bool
-	playbackVersion   uint64
+	playbackVersion   atomic.Uint64
 	requestedVersion  uint64
 	failedVersion     uint64
 	progressMs        int
@@ -239,10 +240,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmedPlaying = msg.IsPlaying
 				if m.playbackReconcile {
 					m.playbackReconcile = false
-					if m.desiredPlaying != m.confirmedPlaying && m.playbackVersion > m.failedVersion {
+					if m.desiredPlaying != m.confirmedPlaying && m.playbackVersion.Load() > m.failedVersion {
 						cmds = append(cmds, m.startPlaybackCommand())
 					} else {
 						m.isPlaying = m.confirmedPlaying
+						m.desiredPlaying = m.confirmedPlaying
 					}
 				} else {
 					if m.desiredPlaying == previouslyConfirmed {
@@ -270,10 +272,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playbackChangedMsg:
 		m.playbackPending = false
 		if msg.err != nil {
-			cmds = append(cmds, m.showError(fmt.Errorf("failed to toggle playback: %w", msg.err), 3*time.Second))
-			m.failedVersion = m.requestedVersion
-			m.playbackReconcile = true
-			cmds = append(cmds, m.pollPlaybackCmd())
+			if msg.version == 0 || msg.version >= m.playbackVersion.Load() {
+				cmds = append(cmds, m.showError(fmt.Errorf("failed to toggle playback: %w", msg.err), 3*time.Second))
+				m.failedVersion = m.requestedVersion
+				m.playbackReconcile = true
+				cmds = append(cmds, m.pollPlaybackCmd())
+			} else if m.desiredPlaying != m.confirmedPlaying {
+				cmds = append(cmds, m.startPlaybackCommand())
+			}
 		} else {
 			m.confirmedPlaying = msg.playing
 			if m.desiredPlaying != m.confirmedPlaying {
@@ -408,7 +414,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) togglePlayback() tea.Cmd {
 	m.desiredPlaying = !m.desiredPlaying
 	m.isPlaying = m.desiredPlaying
-	m.playbackVersion++
+	m.playbackVersion.Add(1)
 	if m.playbackPending || m.playbackReconcile {
 		return nil
 	}
@@ -420,7 +426,7 @@ func (m *Model) togglePlayback() tea.Cmd {
 
 func (m *Model) startPlaybackCommand() tea.Cmd {
 	m.playbackPending = true
-	m.requestedVersion = m.playbackVersion
+	m.requestedVersion = m.playbackVersion.Load()
 	m.isPlaying = m.desiredPlaying
 	return m.togglePlayPauseCmd(m.desiredPlaying)
 }

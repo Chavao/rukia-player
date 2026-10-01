@@ -9,21 +9,39 @@ import (
 func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID
+	version := m.requestedVersion
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
 		var err error
-		if shouldPlay {
-			if client != nil {
-				err = client.Resume(ctx, deviceID)
+		backoffs := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond}
+		for attempt := 0; attempt <= len(backoffs); attempt++ {
+			if shouldPlay {
+				if client != nil {
+					err = client.Resume(ctx, deviceID)
+				}
+			} else {
+				if client != nil {
+					err = client.Pause(ctx, deviceID)
+				}
 			}
-		} else {
-			if client != nil {
-				err = client.Pause(ctx, deviceID)
+			if err == nil {
+				break
+			}
+			if version < m.playbackVersion.Load() {
+				// Abort retries if superseded by a newer user action
+				break
+			}
+			if attempt < len(backoffs) {
+				select {
+				case <-time.After(backoffs[attempt]):
+				case <-ctx.Done():
+					return playbackChangedMsg{version: version, playing: shouldPlay, err: ctx.Err()}
+				}
 			}
 		}
-		return playbackChangedMsg{playing: shouldPlay, err: err}
+		return playbackChangedMsg{version: version, playing: shouldPlay, err: err}
 	}
 }
 
