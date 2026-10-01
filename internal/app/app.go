@@ -158,11 +158,15 @@ func Run(ctx context.Context, args []string) error {
 	playbackErr := startInitialPlayback(playbackCtx, spotifyClient, targetDeviceID, playlist.URI)
 	cancelPlayback()
 	if playbackErr != nil {
-		return formatStartupError("failed to start playlist", playbackErr)
+		fmt.Printf("Notice: could not start initial playback (%v). Starting TUI for manual playback.\n", playbackErr)
 	}
 
 	// 10. Start Bubble Tea TUI
 	model := ui.NewModel(spotifyClient, playerEngine, user, playlist, targetDeviceID, cfg)
+	if playbackErr != nil {
+		model.SetPlaybackInitialState(false)
+		model.SetInitialError(playbackErr)
+	}
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -194,10 +198,19 @@ type playbackStarter interface {
 	PlayPlaylist(context.Context, string, string, int) error
 }
 
+var initialPlaybackDelay = 250 * time.Millisecond
+
 func startInitialPlayback(ctx context.Context, client playbackStarter, deviceID, playlistURI string) error {
 	var transferErr error
 	if deviceID != "" {
 		transferErr = client.TransferPlayback(ctx, deviceID, true)
+		if initialPlaybackDelay > 0 {
+			select {
+			case <-time.After(initialPlaybackDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 	playErr := client.PlayPlaylist(ctx, deviceID, playlistURI, 0)
 	if playErr != nil {

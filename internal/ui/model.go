@@ -535,3 +535,16 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
+
+// SetPlaybackInitialState overrides the initial playing and intent state.
+func (m *Model) SetPlaybackInitialState(playing bool) {
+	m.isPlaying = playing
+	m.desiredPlaying = playing
+	m.confirmedPlaying = playing
+}
+
+// SetInitialError sets an initial error to display on startup.
+func (m *Model) SetInitialError(err error) {
+	m.err = err
+	m.errorGeneration++
+}

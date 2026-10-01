@@ -106,22 +106,23 @@ func StartCallbackServer(ctx context.Context, redirectURLStr string) (*CallbackS
 	}
 
 	hostname := u.Hostname()
-	if hostname != "127.0.0.1" && hostname != "localhost" && hostname != "::1" {
-		return nil, fmt.Errorf("insecure redirect URI host: %s; must be localhost or 127.0.0.1", hostname)
+	if hostname != "127.0.0.1" && hostname != "::1" {
+		return nil, fmt.Errorf("insecure redirect URI host: %s; Spotify requires loopback IP (127.0.0.1 or ::1)", hostname)
 	}
 
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return nil, fmt.Errorf("unsupported redirect URI scheme: %s; must be http or https", u.Scheme)
 	}
 
-	hostPort := u.Host
-	if !hasPort(hostPort) {
+	port := u.Port()
+	if port == "" {
 		if u.Scheme == "https" {
-			hostPort = net.JoinHostPort(hostPort, "443")
+			port = "443"
 		} else {
-			hostPort = net.JoinHostPort(hostPort, "80")
+			port = "80"
 		}
 	}
+	hostPort := net.JoinHostPort(hostname, port)
 
 	var listener net.Listener
 	if u.Scheme == "https" {
@@ -224,9 +225,4 @@ func StartCallbackServer(ctx context.Context, redirectURLStr string) (*CallbackS
 	}()
 
 	return &CallbackServer{Results: resultCh, Addr: listener.Addr().String(), Done: doneCh}, nil
-}
-
-func hasPort(host string) bool {
-	_, _, err := net.SplitHostPort(host)
-	return err == nil
 }

@@ -98,6 +98,12 @@ func TestStartHTTPSCallbackServerSecurity(t *testing.T) {
 		t.Errorf("expected insecure host error, got %v", err)
 	}
 
+	// 1b. localhost should be rejected (Spotify requires loopback IP literal)
+	_, err = StartHTTPSCallbackServer(ctx, "http://localhost:8443/callback")
+	if err == nil || !strings.Contains(err.Error(), "insecure redirect URI host") {
+		t.Errorf("expected localhost to be rejected as insecure, got %v", err)
+	}
+
 	// 2. Unsupported scheme should be rejected
 	_, err = StartHTTPSCallbackServer(ctx, "ftp://127.0.0.1:8443/callback")
 	if err == nil || !strings.Contains(err.Error(), "unsupported redirect URI scheme") {
@@ -131,4 +137,18 @@ func TestStartHTTPSCallbackServerSecurity(t *testing.T) {
 
 	// Drain result channel
 	<-resCh
+}
+
+func TestCallbackServerIPv6(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Ephemeral IPv6 port
+	server, err := StartCallbackServer(ctx, "http://[::1]:0/callback")
+	if err != nil {
+		t.Skipf("IPv6 loopback not supported on this host: %v", err)
+	}
+	if strings.Contains(server.Addr, "[[::1]]") {
+		t.Errorf("invalid double-bracketed IPv6 address: %s", server.Addr)
+	}
 }

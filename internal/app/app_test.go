@@ -30,6 +30,10 @@ func (s *playbackStarterStub) PlayPlaylist(_ context.Context, device, _ string, 
 }
 
 func TestStartInitialPlayback(t *testing.T) {
+	origDelay := initialPlaybackDelay
+	initialPlaybackDelay = 0
+	defer func() { initialPlaybackDelay = origDelay }()
+
 	transferErr := errors.New("transfer failed")
 	playErr := errors.New("play failed")
 	for _, tc := range []struct {
@@ -59,6 +63,22 @@ func TestStartInitialPlayback(t *testing.T) {
 				t.Fatalf("combined error omits transfer failure: %v", err)
 			}
 		})
+	}
+}
+
+func TestStartInitialPlaybackRespectsDelay(t *testing.T) {
+	origDelay := initialPlaybackDelay
+	initialPlaybackDelay = 50 * time.Millisecond
+	defer func() { initialPlaybackDelay = origDelay }()
+
+	stub := &playbackStarterStub{}
+	start := time.Now()
+	err := startInitialPlayback(context.Background(), stub, "dev", "spotify:playlist:test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 50*time.Millisecond {
+		t.Fatalf("expected at least 50ms delay, got %v", elapsed)
 	}
 }
 
