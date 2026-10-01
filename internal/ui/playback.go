@@ -10,9 +10,9 @@ import (
 )
 
 type playbackPollResultMsg struct {
-	state                                                   *spotify.PlaybackState
-	err                                                     error
-	version, epoch, sequence, volumeGeneration, volumeEpoch uint64
+	state                                                                              *spotify.PlaybackState
+	err                                                                                error
+	version, epoch, sequence, volumeGeneration, volumeEpoch, shuffleEpoch, repeatEpoch uint64
 }
 
 func (m *Model) pollPlaybackCmd() tea.Cmd {
@@ -21,7 +21,7 @@ func (m *Model) pollPlaybackCmd() tea.Cmd {
 	}
 	client, parent := m.spotifyClient, m.ctx
 	m.pollSequence++
-	result := playbackPollResultMsg{version: m.playbackVersion.Load(), epoch: m.playbackEpoch, sequence: m.pollSequence, volumeGeneration: m.volumeGeneration.Load(), volumeEpoch: m.volumeEpoch}
+	result := playbackPollResultMsg{version: m.playbackVersion.Load(), epoch: m.playbackEpoch, sequence: m.pollSequence, volumeGeneration: m.volumeGeneration.Load(), volumeEpoch: m.volumeEpoch, shuffleEpoch: m.shuffleEpoch, repeatEpoch: m.repeatEpoch}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
@@ -105,6 +105,7 @@ func (m *Model) finishPlaybackCommand(version uint64, playing bool, err error, a
 }
 
 func (m *Model) observePlayback(state *spotify.PlaybackState) tea.Cmd {
+	m.observeRemoteModes(state, m.shuffleEpoch, m.repeatEpoch)
 	return m.observePlaybackPoll(state, m.volumeGeneration.Load(), m.volumeEpoch)
 }
 
@@ -114,7 +115,6 @@ func (m *Model) observePlaybackPoll(state *spotify.PlaybackState, volumeGenerati
 		// stopped observation, and must resolve failed intents just like a state.
 		state = &spotify.PlaybackState{RepeatState: "off"}
 	}
-	m.repeatMode, m.shuffle = state.RepeatState, state.ShuffleState
 	if volumeEpoch == m.volumeEpoch {
 		m.observeVolume(state.Device, volumeGeneration)
 	}
