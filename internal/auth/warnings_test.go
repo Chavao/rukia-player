@@ -119,6 +119,47 @@ func TestWarningQueuePreservesLatestWithoutConsumer(t *testing.T) {
 	}
 }
 
+func TestSuccessfulPersistenceClearsResolvedWarning(t *testing.T) {
+	flow := NewOAuthFlow(DefaultConfig())
+	persistenceErr := errors.New("disk unavailable")
+	flow.warnings.publish(fmt.Errorf("failed to save refreshed Spotify token: %w", persistenceErr))
+	if !errors.Is(flow.LatestWarning(), persistenceErr) {
+		t.Fatalf("missing initial warning: %v", flow.LatestWarning())
+	}
+
+	initial := &oauth2.Token{
+		AccessToken:  "expired",
+		RefreshToken: "refresh",
+		Expiry:       time.Now().Add(-time.Hour),
+	}
+	refreshed := &oauth2.Token{
+		AccessToken:  "recovered",
+		RefreshToken: "refresh",
+		Expiry:       time.Now().Add(time.Hour),
+	}
+	pts := &persistingTokenSource{
+		flow:    flow,
+		parent:  context.Background(),
+		lastTok: initial,
+		source: func(context.Context, *oauth2.Token) oauth2.TokenSource {
+			return &staticTokenSource{tok: refreshed}
+		},
+		saveToken: func(*oauth2.Token) error { return nil },
+		warn:      flow.warnings.publish,
+	}
+	if _, err := pts.Token(); err != nil {
+		t.Fatal(err)
+	}
+	if warning := flow.LatestWarning(); warning != nil {
+		t.Fatalf("successful persistence retained stale warning: %v", warning)
+	}
+	select {
+	case warning := <-flow.Warnings():
+		t.Fatalf("successful persistence retained queued warning: %v", warning)
+	default:
+	}
+}
+
 func TestPersistingTokenSourceSavesTokenRotationOnce(t *testing.T) {
 	for _, fails := range []bool{false, true} {
 		t.Run(fmt.Sprintf("persistence_failure=%v", fails), func(t *testing.T) {
