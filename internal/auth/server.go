@@ -32,7 +32,7 @@ type CallbackServer struct {
 	Done    <-chan struct{}
 }
 
-// GenerateSelfSignedCert generates an in-memory TLS certificate for 127.0.0.1 / localhost.
+// GenerateSelfSignedCert generates an in-memory TLS certificate for loopback hosts.
 func GenerateSelfSignedCert() (tls.Certificate, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -59,7 +59,7 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		DNSNames:              []string{"localhost"},
 	}
 
@@ -169,6 +169,8 @@ func StartCallbackServer(ctx context.Context, redirectURLStr string) (*CallbackS
 	}
 
 	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		// Browser response writes are best effort: disconnecting the browser
+		// must not discard an OAuth result already received by this handler.
 		query := r.URL.Query()
 		authError := query.Get("error")
 		code := query.Get("code")
@@ -207,7 +209,9 @@ func StartCallbackServer(ctx context.Context, redirectURLStr string) (*CallbackS
 	})
 
 	go func() {
-		_ = server.Serve(listener)
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			publish(CallbackResult{Error: fmt.Errorf("callback server failed: %w", err)})
+		}
 		close(serveDone)
 	}()
 
@@ -215,9 +219,18 @@ func StartCallbackServer(ctx context.Context, redirectURLStr string) (*CallbackS
 		select {
 		case <-ctx.Done():
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = server.Shutdown(shutdownCtx)
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				publish(CallbackResult{Error: fmt.Errorf("callback server shutdown failed: %w", err)})
+				// Shutdown leaves active connections open on timeout. Close them
+				// before Done so an incomplete browser request cannot outlive login.
+				if err := server.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+					publish(CallbackResult{Error: fmt.Errorf("callback server close failed: %w", err)})
+				}
+			}
 			cancel()
-			_ = listener.Close()
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				publish(CallbackResult{Error: fmt.Errorf("callback listener close failed: %w", err)})
+			}
 		case <-serveDone:
 		}
 		<-serveDone
