@@ -24,6 +24,7 @@ type Config struct {
 	ClientID     string        `json:"client_id"`
 	ClientSecret string        `json:"client_secret,omitempty"`
 	AuthFlow     string        `json:"auth_flow,omitempty"`
+	DeviceID     string        `json:"device_id,omitempty"`
 	RedirectURI  string        `json:"redirect_uri"`
 	Token        *oauth2.Token `json:"token,omitempty"`
 	LastPlaylist string        `json:"last_playlist,omitempty"`
@@ -70,6 +71,7 @@ type configDTO struct {
 	ClientID     string        `json:"client_id"`
 	ClientSecret string        `json:"client_secret,omitempty"`
 	AuthFlow     string        `json:"auth_flow,omitempty"`
+	DeviceID     string        `json:"device_id,omitempty"`
 	RedirectURI  string        `json:"redirect_uri"`
 	Token        *oauth2.Token `json:"token,omitempty"`
 	LastPlaylist string        `json:"last_playlist,omitempty"`
@@ -103,6 +105,10 @@ func LoadConfig() (*Config, error) {
 	cfg.ClientID = dto.ClientID
 	cfg.ClientSecret = dto.ClientSecret
 	cfg.AuthFlow = dto.AuthFlow
+	cfg.DeviceID = dto.DeviceID
+	if err := validateDeviceID(cfg.DeviceID); err != nil {
+		return nil, fmt.Errorf("invalid device_id in config: %w", err)
+	}
 	cfg.RedirectURI = dto.RedirectURI
 	cfg.Token = dto.Token
 	cfg.LastPlaylist = dto.LastPlaylist
@@ -183,6 +189,9 @@ func (c *Config) SetLastPlaylist(id string) error {
 }
 
 func (c *Config) saveLocked() error {
+	if err := validateDeviceID(c.DeviceID); err != nil {
+		return fmt.Errorf("invalid device_id in config: %w", err)
+	}
 	path, err := GetConfigPath()
 	if err != nil {
 		return err
@@ -197,9 +206,12 @@ func (c *Config) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("failed to create config file: %w", err)
 	}
+	// Removing a leftover temporary file is best effort; the write/rename error
+	// remains the actionable persistence failure.
 	defer os.Remove(f.Name())
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		// Preserve the write error; closing only releases the temporary file.
+		_ = f.Close()
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	if err := f.Close(); err != nil {
