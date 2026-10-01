@@ -71,6 +71,7 @@ func (m *Model) setShuffleCmd(shuf bool) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID
 	parent := m.ctx
+	version := m.requestedShuffleVersion
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 		defer cancel()
@@ -78,7 +79,7 @@ func (m *Model) setShuffleCmd(shuf bool) tea.Cmd {
 		if client != nil {
 			err = client.SetShuffle(ctx, deviceID, shuf)
 		}
-		return actionResultMsg{action: "toggle shuffle", err: err}
+		return actionResultMsg{version: version, action: "toggle shuffle", err: err}
 	}
 }
 
@@ -86,6 +87,7 @@ func (m *Model) setRepeatCmd(mode string) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID
 	parent := m.ctx
+	version := m.requestedRepeatVersion
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 		defer cancel()
@@ -93,7 +95,7 @@ func (m *Model) setRepeatCmd(mode string) tea.Cmd {
 		if client != nil {
 			err = client.SetRepeat(ctx, deviceID, mode)
 		}
-		return actionResultMsg{action: "toggle repeat", err: err}
+		return actionResultMsg{version: version, action: "toggle repeat", err: err}
 	}
 }
 

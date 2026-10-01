@@ -384,20 +384,27 @@ func TestModelActionResultMsgAndErrorDisplay(t *testing.T) {
 
 func TestRemoteActionPollingPolicy(t *testing.T) {
 	polls := 0
-	model := NewModel(&mockSpotifyController{getPlaybackStateFunc: func(context.Context) (*spotify.PlaybackState, error) {
+	controller := &mockSpotifyController{getPlaybackStateFunc: func(context.Context) (*spotify.PlaybackState, error) {
 		polls++
 		return &spotify.PlaybackState{IsPlaying: true}, nil
-	}}, nil, nil, nil, "device")
+	}}
+	model := NewModel(controller, nil, nil, nil, "device")
 
-	// Success cases: only "play track" should trigger an immediate poll
-	for _, action := range []string{"change volume", "toggle shuffle", "toggle repeat"} {
-		_, cmd := model.Update(actionResultMsg{version: model.requestedVersion, action: action})
-		if cmd != nil {
-			t.Fatalf("%s unexpectedly scheduled immediate poll on success", action)
-		}
+	if _, cmd := model.Update(actionResultMsg{version: model.requestedVersion, action: "change volume"}); cmd != nil {
+		t.Fatal("change volume unexpectedly scheduled immediate poll on success")
 	}
 
-	// "play track" success triggers immediate poll to sync track info
+	shuffleCmd := model.toggleShuffle()
+	shuffleResult := shuffleCmd().(actionResultMsg)
+	if _, cmd := model.Update(shuffleResult); cmd != nil {
+		t.Fatal("toggle shuffle unexpectedly scheduled immediate poll on success")
+	}
+	repeatCmd := model.toggleRepeat()
+	repeatResult := repeatCmd().(actionResultMsg)
+	if _, cmd := model.Update(repeatResult); cmd != nil {
+		t.Fatal("toggle repeat unexpectedly scheduled immediate poll on success")
+	}
+
 	_, playCmd := model.Update(actionResultMsg{version: model.requestedVersion, action: "play track"})
 	if playCmd == nil {
 		t.Fatal("play track success must schedule immediate poll")
@@ -407,22 +414,44 @@ func TestRemoteActionPollingPolicy(t *testing.T) {
 		t.Fatalf("expected 1 poll from play track success, got %d", polls)
 	}
 
-	// Playback and mode failures schedule immediate reconciliation; volume uses the periodic safety net.
-	for _, action := range []string{"play track", "toggle shuffle", "toggle repeat"} {
-		pollsBefore := polls
-		_, cmd := model.Update(actionResultMsg{version: model.requestedVersion, action: action, err: assertErr("failed")})
+	executeReconciliation := func(t *testing.T, model *Model, cmd tea.Cmd, action string) {
+		t.Helper()
 		if cmd == nil {
 			t.Fatalf("%s failure did not schedule reconciliation poll", action)
 		}
-		// Execute the reconciliation poll without waiting for the unrelated error timer.
 		if batch, ok := cmd().(tea.BatchMsg); ok {
 			model.Update(batch[len(batch)-1]())
 		} else {
 			model.Update(cmd())
 		}
-		if polls <= pollsBefore {
-			t.Fatalf("%s failure did not trigger poll execution", action)
-		}
+	}
+
+	pollsBefore := polls
+	_, failedPlay := model.Update(actionResultMsg{version: model.requestedVersion, action: "play track", err: assertErr("failed")})
+	executeReconciliation(t, model, failedPlay, "play track")
+	if polls <= pollsBefore {
+		t.Fatal("play track failure did not trigger poll execution")
+	}
+
+	for _, tc := range []struct {
+		name  string
+		start func(*Model) tea.Cmd
+	}{
+		{"toggle shuffle", func(m *Model) tea.Cmd { return m.toggleShuffle() }},
+		{"toggle repeat", func(m *Model) tea.Cmd { return m.toggleRepeat() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(controller, nil, nil, nil, "device")
+			request := tc.start(m)
+			result := request().(actionResultMsg)
+			result.err = assertErr("failed")
+			pollsBefore := polls
+			_, cmd := m.Update(result)
+			executeReconciliation(t, m, cmd, tc.name)
+			if polls <= pollsBefore {
+				t.Fatalf("%s failure did not trigger poll execution", tc.name)
+			}
+		})
 	}
 }
 

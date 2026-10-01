@@ -109,6 +109,20 @@ type Model struct {
 	exitPending                  bool
 	repeatMode                   string
 	shuffle                      bool
+	shufflePending               bool
+	shuffleVersion               uint64
+	requestedShuffleVersion      uint64
+	requestedShuffle             bool
+	shuffleEpoch                 uint64
+	shuffleAwaitingConfirmation  bool
+	shuffleObservationCount      int
+	repeatPending                bool
+	repeatVersion                uint64
+	requestedRepeatVersion       uint64
+	requestedRepeat              string
+	repeatEpoch                  uint64
+	repeatAwaitingConfirmation   bool
+	repeatObservationCount       int
 
 	showExitModal bool
 	exitDialog    ExitDialog
@@ -262,6 +276,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			cmds = append(cmds, m.showError(msg.err, 3*time.Second), m.failedPlaybackPoll())
 		} else {
+			m.observeRemoteModes(msg.state, msg.shuffleEpoch, msg.repeatEpoch)
 			cmds = append(cmds, m.observePlaybackPoll(msg.state, msg.volumeGeneration, msg.volumeEpoch))
 		}
 
@@ -282,6 +297,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.finishPlaybackCommand(msg.version, true, msg.err, msg.action))
 		} else if msg.action == "change volume" {
 			cmds = append(cmds, m.finishVolumeCommand(msg))
+		} else if msg.action == "toggle shuffle" {
+			cmds = append(cmds, m.finishShuffleCommand(msg))
+		} else if msg.action == "toggle repeat" {
+			cmds = append(cmds, m.finishRepeatCommand(msg))
 		} else if msg.err != nil {
 			cmds = append(cmds, m.showError(fmt.Errorf("failed to %s: %w", msg.action, msg.err), 3*time.Second))
 			cmds = append(cmds, m.pollPlaybackCmd())
@@ -392,16 +411,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Shuffle):
-			m.shuffle = !m.shuffle
-			cmds = append(cmds, m.setShuffleCmd(m.shuffle))
+			cmds = append(cmds, m.toggleShuffle())
 
 		case key.Matches(msg, m.keys.Repeat):
-			if m.repeatMode == "off" {
-				m.repeatMode = "context"
-			} else {
-				m.repeatMode = "off"
-			}
-			cmds = append(cmds, m.setRepeatCmd(m.repeatMode))
+			cmds = append(cmds, m.toggleRepeat())
 		}
 	}
 
