@@ -226,6 +226,8 @@ func (p *persistingTokenSource) TokenContext(ctx context.Context) (*oauth2.Token
 			if p.warn != nil {
 				p.warn(fmt.Errorf("failed to save refreshed Spotify token: %w", err))
 			}
+		} else if p.flow != nil {
+			p.flow.warnings.resolve()
 		}
 	}
 
@@ -290,6 +292,7 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 		if err := o.appCfg.SetPKCEToken(token); err != nil {
 			return nil, fmt.Errorf("failed to save token to config: %w", err)
 		}
+		o.warnings.resolve()
 
 		fmt.Println("Spotify authentication successful!")
 		return token, nil
@@ -346,6 +349,8 @@ func (o *OAuthFlow) SilentRefresh(ctx context.Context) (*oauth2.Token, error) {
 
 	if err := o.saveToken(refreshed); err != nil {
 		o.warnings.publish(fmt.Errorf("failed to save refreshed Spotify token: %w", err))
+	} else {
+		o.warnings.resolve()
 	}
 
 	return refreshed, nil

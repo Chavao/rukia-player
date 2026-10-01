@@ -50,6 +50,22 @@ func (q *warningQueue) channel() <-chan error {
 	return q.ch
 }
 
+func (q *warningQueue) resolve() {
+	q.mu.Lock()
+	q.latest = nil
+	if q.ch != nil {
+		select {
+		case <-q.ch:
+		default:
+		}
+	}
+	sink := q.sink
+	q.mu.Unlock()
+	if sink != nil {
+		sink.resolve()
+	}
+}
+
 func (q *warningQueue) publish(err error) {
 	if err == nil {
 		return
@@ -87,6 +103,12 @@ func (s *asyncWarningSink) publish(err error) {
 	}
 	s.running = true
 	go s.run()
+}
+
+func (s *asyncWarningSink) resolve() {
+	s.mu.Lock()
+	s.latest = nil
+	s.mu.Unlock()
 }
 
 func (s *asyncWarningSink) run() {
