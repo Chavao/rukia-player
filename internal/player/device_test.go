@@ -2,6 +2,7 @@ package player
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -13,10 +14,19 @@ func TestLegacyDeviceIDPreservesOriginalAlgorithm(t *testing.T) {
 	if got := legacyDeviceID("/tmp/legacy-cache"); got != "ebcf3b093748b6f5905eb662196cb126ae3d35ca" {
 		t.Fatalf("legacy identity changed: %q", got)
 	}
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	want := legacyDeviceID(filepath.Join(os.Getenv("XDG_CACHE_HOME"), "rukia", "librespot"))
-	if got := LegacyDeviceID(); got != want {
-		t.Fatalf("migration does not use current legacy cache path: got=%q want=%q", got, want)
+	t.Setenv("HOME", t.TempDir())
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Released main hashed this home-relative path before XDG cache support.
+	sum := sha1.Sum([]byte("rukia-player-device-" + filepath.Join(home, ".cache", "rukia", "librespot")))
+	want := hex.EncodeToString(sum[:])
+	for _, cache := range []string{"", t.TempDir(), t.TempDir()} {
+		t.Setenv("XDG_CACHE_HOME", cache)
+		if got := LegacyDeviceID(); got != want {
+			t.Fatalf("migration with XDG_CACHE_HOME=%q: got=%q want=%q", cache, got, want)
+		}
 	}
 }
 
@@ -24,15 +34,20 @@ func TestSavedDeviceIDIndependentOfCacheDirectory(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	id := LegacyDeviceID()
-	first, err := NewFileStateStore(defaultCacheDir(), id).Load()
+	firstCache := defaultCacheDir()
+	first, err := NewFileStateStore(firstCache, id).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	if LegacyDeviceID() == id {
-		t.Fatal("test did not relocate the legacy identity source")
+	secondCache := defaultCacheDir()
+	if firstCache == secondCache {
+		t.Fatal("test did not relocate cache storage")
 	}
-	second, err := NewFileStateStore(defaultCacheDir(), id).Load()
+	if LegacyDeviceID() != id {
+		t.Fatal("cache relocation changed the upgrade migration identity")
+	}
+	second, err := NewFileStateStore(secondCache, id).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +57,19 @@ func TestSavedDeviceIDIndependentOfCacheDirectory(t *testing.T) {
 	engine := NewEngine("test", WithDeviceID(id))
 	if engine.deviceID != id {
 		t.Fatalf("engine did not retain supplied identity: %q", engine.deviceID)
+	}
+}
+
+func TestLegacyDeviceIDPreservesMissingHomeBehavior(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	if _, err := os.UserHomeDir(); err == nil {
+		t.Skip("platform resolves the home directory without HOME")
+	}
+	// Historical main joined an empty home when lookup failed.
+	sum := sha1.Sum([]byte("rukia-player-device-" + filepath.Join(".cache", "rukia", "librespot")))
+	if got, want := LegacyDeviceID(), hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("missing-home upgrade identity: got=%q want=%q", got, want)
 	}
 }
 

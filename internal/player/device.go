@@ -4,6 +4,8 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 )
 
 // EngineOption configures the player without coupling it to application config.
@@ -14,10 +16,14 @@ func WithDeviceID(deviceID string) EngineOption {
 	return func(engine *Engine) { engine.deviceID = deviceID }
 }
 
-// LegacyDeviceID returns the exact identity advertised before identity migration.
+// LegacyDeviceID returns the identity advertised by released main before XDG
+// cache support. Its home-relative path is independent of current cache storage.
 // Application startup persists this value once and supplies it with WithDeviceID.
 func LegacyDeviceID() string {
-	return legacyDeviceID(defaultCacheDir())
+	// Historical startup used an empty home on lookup failure; preserve that
+	// exact hash input as well, rather than selecting a different cache fallback.
+	home, _ := os.UserHomeDir()
+	return legacyDeviceID(filepath.Join(home, ".cache", "rukia", "librespot"))
 }
 
 func legacyDeviceID(cacheDir string) string {
