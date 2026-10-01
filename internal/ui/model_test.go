@@ -539,6 +539,101 @@ func TestStaleVolumePersistenceDoesNotOverwriteLatestValue(t *testing.T) {
 	}
 }
 
+func TestVolumePollDuringDebounceDoesNotOverwriteDesiredVolume(t *testing.T) {
+	settings := &volumeSettingsStub{volume: 50}
+	model := NewModel(nil, nil, nil, nil, "", settings)
+	model.volume = 50
+	model.desiredVolume = 50
+
+	// User increases volume
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	if model.volume != 55 {
+		t.Fatalf("expected volume 55, got %d", model.volume)
+	}
+
+	// Spotify poll arrives before debounce ticks, reporting stale volume 50
+	model.Update(playbackStateMsg(&spotify.PlaybackState{
+		Device: &spotify.Device{VolumePercent: 50},
+	}))
+
+	// Volume in model must NOT have been overwritten by stale poll
+	if model.volume != 55 {
+		t.Fatalf("poll prematurely overwritten desired volume: got %d, want 55", model.volume)
+	}
+
+	// Debounce fires and persists
+	_, cmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load(), volume: 55})
+	if cmd == nil {
+		t.Fatal("expected persist command")
+	}
+	model.Update(cmd())
+
+	if settings.volume != 55 {
+		t.Fatalf("expected persisted volume 55, got %d", settings.volume)
+	}
+}
+
+func TestTrackSelectionUpdatesPlaybackStateMachine(t *testing.T) {
+	tracks := []spotify.Track{
+		{ID: "track-0", Name: "Zero", DurationMs: 100000},
+		{ID: "track-1", Name: "One", DurationMs: 120000},
+	}
+	playlist := &spotify.Playlist{ID: "p1", Tracks: tracks, URI: "spotify:playlist:p1"}
+	var pauseCalled bool
+	mock := &mockSpotifyController{
+		playPlaylistFunc: func(ctx context.Context, deviceID, playlistURI string, trackOffset int) error {
+			return nil
+		},
+		pauseFunc: func(ctx context.Context, deviceID string) error {
+			pauseCalled = true
+			return nil
+		},
+	}
+	model := NewModel(mock, nil, nil, playlist, "dev-1")
+	// Player is paused initially
+	model.isPlaying = false
+	model.desiredPlaying = false
+	model.confirmedPlaying = false
+	model.cursor = 1
+	model.playingIdx = 0
+
+	// User hits Enter on track 1
+	_, playCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if playCmd == nil {
+		t.Fatal("expected play track command on enter")
+	}
+	if !model.isPlaying || !model.desiredPlaying || !model.playbackPending {
+		t.Fatalf("state machine not updated on Enter: isPlaying=%v, desired=%v, pending=%v",
+			model.isPlaying, model.desiredPlaying, model.playbackPending)
+	}
+
+	// Before track finishes starting, user hits Space to Pause
+	model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if model.desiredPlaying != false {
+		t.Fatalf("expected desiredPlaying=false after space, got %v", model.desiredPlaying)
+	}
+
+	// Play track succeeds remotely
+	_, nextCmd := model.Update(actionResultMsg{action: "play track", err: nil})
+	if nextCmd == nil {
+		t.Fatal("expected pause command after play track completed with desiredPlaying=false")
+	}
+
+	// Executing the queued command should trigger pause
+	if batch, ok := nextCmd().(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c != nil {
+				c()
+			}
+		}
+	} else {
+		nextCmd()
+	}
+	if !pauseCalled {
+		t.Fatal("pause command was not dispatched after track start completed")
+	}
+}
+
 func TestModelTrackIndexLookup(t *testing.T) {
 	tracks := []spotify.Track{
 		{ID: "track-a", Name: "Alpha", DurationMs: 120000},

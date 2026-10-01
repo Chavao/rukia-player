@@ -10,11 +10,14 @@ func (m *Model) scheduleVolumePersist() tea.Cmd {
 		return nil
 	}
 	generation := m.volumeGeneration.Add(1)
-	return tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return volumePersistMsg{generation: generation} })
+	vol := m.volume
+	return tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
+		return volumePersistMsg{generation: generation, volume: vol}
+	})
 }
 
-func (m *Model) persistVolumeCmd(exiting bool) tea.Cmd {
-	settings, volume := m.volumeSettings, m.volume
+func (m *Model) persistVolumeCmd(volume int, exiting bool) tea.Cmd {
+	settings := m.volumeSettings
 	generation := m.volumeGeneration.Load()
 	return func() tea.Msg {
 		m.volumeWriteMu.Lock()
@@ -22,6 +25,6 @@ func (m *Model) persistVolumeCmd(exiting bool) tea.Cmd {
 		if generation != m.volumeGeneration.Load() {
 			return volumePersistedMsg{}
 		}
-		return volumePersistedMsg{err: settings.SetVolume(volume), exiting: exiting}
+		return volumePersistedMsg{generation: generation, err: settings.SetVolume(volume), exiting: exiting}
 	}
 }

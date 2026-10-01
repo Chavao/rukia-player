@@ -29,10 +29,14 @@ type actionResultMsg struct {
 	action string
 	err    error
 }
-type volumePersistMsg struct{ generation uint64 }
+type volumePersistMsg struct {
+	generation uint64
+	volume     int
+}
 type volumePersistedMsg struct {
-	err     error
-	exiting bool
+	generation uint64
+	err        error
+	exiting    bool
 }
 type clearErrorMsg struct{ generation uint64 }
 
@@ -69,23 +73,25 @@ type Model struct {
 	volumeSettings VolumeSettings
 	trackIndex     map[string]int
 
-	cursor            int
-	playingIdx        int
-	isPlaying         bool
-	confirmedPlaying  bool
-	desiredPlaying    bool
-	playbackPending   bool
-	playbackReconcile bool
-	playbackVersion   atomic.Uint64
-	requestedVersion  uint64
-	failedVersion     uint64
-	progressMs        int
-	volume            int
-	volumeGeneration  atomic.Uint64
-	volumeWriteMu     sync.Mutex
-	exitPending       bool
-	repeatMode        string
-	shuffle           bool
+	cursor                    int
+	playingIdx                int
+	isPlaying                 bool
+	confirmedPlaying          bool
+	desiredPlaying            bool
+	playbackPending           bool
+	playbackReconcile         bool
+	playbackVersion           atomic.Uint64
+	requestedVersion          uint64
+	failedVersion             uint64
+	progressMs                int
+	volume                    int
+	desiredVolume             int
+	volumeGeneration          atomic.Uint64
+	persistedVolumeGeneration uint64
+	volumeWriteMu             sync.Mutex
+	exitPending               bool
+	repeatMode                string
+	shuffle                   bool
 
 	showExitModal bool
 	exitDialog    ExitDialog
@@ -135,6 +141,7 @@ func NewModel(
 		desiredPlaying:   true,
 		progressMs:       0,
 		volume:           vol,
+		desiredVolume:    vol,
 		repeatMode:       "off",
 		exitDialog:       NewExitDialog(),
 		keys:             DefaultKeyMap(),
@@ -256,8 +263,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.progressMs = msg.ProgressMs
 			m.repeatMode = msg.RepeatState
 			m.shuffle = msg.ShuffleState
-			if msg.Device != nil {
+			if msg.Device != nil && m.volumeGeneration.Load() == m.persistedVolumeGeneration {
 				m.volume = msg.Device.VolumePercent
+				m.desiredVolume = msg.Device.VolumePercent
 			}
 			if msg.Item != nil && m.trackIndex != nil {
 				if idx, ok := m.trackIndex[msg.Item.ID]; ok {
@@ -288,6 +296,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case actionResultMsg:
+		if msg.action == "play track" {
+			m.playbackPending = false
+			if msg.err != nil {
+				m.failedVersion = m.requestedVersion
+				m.playbackReconcile = true
+			} else {
+				m.confirmedPlaying = true
+				if m.desiredPlaying != m.confirmedPlaying {
+					cmds = append(cmds, m.startPlaybackCommand())
+				}
+			}
+		}
 		if msg.err != nil {
 			cmds = append(cmds, m.showError(fmt.Errorf("failed to %s: %w", msg.action, msg.err), 3*time.Second))
 		} else {
@@ -296,18 +316,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case volumePersistMsg:
 		if msg.generation == m.volumeGeneration.Load() {
-			cmds = append(cmds, m.persistVolumeCmd(false))
+			targetVol := msg.volume
+			if targetVol == 0 && m.desiredVolume != 0 {
+				targetVol = m.desiredVolume
+			} else if targetVol == 0 && m.volume != 0 {
+				targetVol = m.volume
+			}
+			cmds = append(cmds, m.persistVolumeCmd(targetVol, false))
 		}
 
 	case volumePersistedMsg:
 		if msg.err != nil {
 			m.exitPending = false
 			cmds = append(cmds, m.showError(fmt.Errorf("failed to save volume: %w", msg.err), 3*time.Second))
-		} else if msg.exiting {
-			if m.playerEngine != nil {
-				_ = m.playerEngine.Close()
+		} else {
+			if msg.generation > m.persistedVolumeGeneration {
+				m.persistedVolumeGeneration = msg.generation
 			}
-			return m, tea.Quit
+			if msg.exiting {
+				if m.playerEngine != nil {
+					_ = m.playerEngine.Close()
+				}
+				return m, tea.Quit
+			}
 		}
 
 	case errMsg:
@@ -332,7 +363,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.volumeSettings != nil {
 						m.exitPending = true
 						m.volumeGeneration.Add(1)
-						return m, m.persistVolumeCmd(true)
+						return m, m.persistVolumeCmd(m.volume, true)
 					}
 					if m.playerEngine != nil {
 						_ = m.playerEngine.Close()
@@ -370,6 +401,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.playingIdx = m.cursor
 				m.progressMs = 0
 				m.isPlaying = true
+				m.desiredPlaying = true
+				m.playbackPending = true
+				m.playbackVersion.Add(1)
+				m.requestedVersion = m.playbackVersion.Load()
 				cmds = append(cmds, m.playTrackIndexCmd(m.cursor))
 			}
 
@@ -382,6 +417,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume > 100 {
 					m.volume = 100
 				}
+				m.desiredVolume = m.volume
 				cmds = append(cmds, m.setVolumeCmd(m.volume), m.scheduleVolumePersist())
 			}
 
@@ -391,6 +427,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume < 0 {
 					m.volume = 0
 				}
+				m.desiredVolume = m.volume
 				cmds = append(cmds, m.setVolumeCmd(m.volume), m.scheduleVolumePersist())
 			}
 
