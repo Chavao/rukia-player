@@ -23,7 +23,14 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libflac-dev libpulse-dev pkg-config
+          sudo apt-get install -y \
+            libogg-dev \
+            libvorbis-dev \
+            libflac-dev \
+            libmpg123-dev \
+            libasound2-dev \
+            libpulse-dev \
+            pkg-config
 
       - name: Run quality checks
         run: make check
