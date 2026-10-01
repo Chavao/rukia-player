@@ -31,7 +31,7 @@ func checkError(resp *http.Response) error {
 
 	var retryAfter time.Duration
 	if retryHeader := resp.Header.Get("Retry-After"); retryHeader != "" {
-		if sec, err := strconv.Atoi(retryHeader); err == nil && sec > 0 {
+		if sec, parseErr := strconv.ParseInt(retryHeader, 10, 64); parseErr == nil && sec > 0 && sec <= (1<<63-1)/int64(time.Second) {
 			retryAfter = time.Duration(sec) * time.Second
 		}
 	}

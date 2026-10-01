@@ -22,11 +22,6 @@ const (
 	DefaultMediaName  = "rukia Spotify Player"
 )
 
-// AppState placeholder for compatibility.
-type AppState struct {
-	DeviceId string
-}
-
 // FileStateStore manages persistent librespot credentials and state.
 type FileStateStore struct {
 	mu       sync.Mutex

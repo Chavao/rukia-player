@@ -61,6 +61,38 @@ func TestClientGetCurrentUser(t *testing.T) {
 	}
 }
 
+func TestCheckErrorRetryAfterParsing(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		header    string
+		wantRetry time.Duration
+	}{
+		{"valid retry after", "120", 120 * time.Second},
+		{"overflow retry after", "999999999999999999999999999999", 0},
+		{"negative retry after", "-5", 0},
+		{"non-numeric retry after", "invalid", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Retry-After", tc.header)
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Write([]byte(`{"error":{"status":429,"message":"too many requests"}}`))
+			}))
+			defer ts.Close()
+
+			resp, _ := ts.Client().Get(ts.URL)
+			err := checkError(resp)
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("expected APIError, got %v", err)
+			}
+			if apiErr.RetryAfter != tc.wantRetry {
+				t.Errorf("got RetryAfter %v, want %v", apiErr.RetryAfter, tc.wantRetry)
+			}
+		})
+	}
+}
+
 func TestGetPlaylistItemsEndpoint(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -12,6 +12,7 @@ The application compiles to the command-line binary `rukia` and starts playing a
 - **Flexible Playlist Arguments**: Supports raw playlist IDs, IDs with query parameters, full Spotify URLs (`open.spotify.com`), and Spotify URIs.
 - **Cyan TUI Theme**: Designed to match the Spotify CLI theme with header stats, track listing (Artist - Album, Title, Duration), shuffle/repeat badges, and bottom progress bar with transient error notices.
 - **Exit Confirmation Dialog**: Modal dialog (`Ctrl+q`, `q`, `Ctrl+c`) with `<No>` and `<Yes>` confirmation buttons.
+- **Session Reuse & Migration**: Seamlessly reuses existing cached credentials from ncspot (`~/.cache/ncspot/librespot/credentials.json`) to minimize re-authentication friction for transitioning users.
 
 ## Prerequisites
 
