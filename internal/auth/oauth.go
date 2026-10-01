@@ -28,17 +28,28 @@ var SpotifyScopes = []string{
 	"streaming",
 }
 
+// ErrReauthenticationRequired means a stored refresh token cannot be used again.
+var ErrReauthenticationRequired = errors.New("Spotify reauthentication required")
+
+const silentRefreshTimeout = 8 * time.Second
+
 // OAuthFlow handles Spotify OAuth 2.0 interactions.
 type OAuthFlow struct {
-	config    *oauth2.Config
-	appCfg    *Config
-	loginFn   func(context.Context) (*oauth2.Token, error)
-	errLogger func(format string, args ...any)
+	config         *oauth2.Config
+	appCfg         *Config
+	loginFn        func(context.Context) (*oauth2.Token, error)
+	warnings       warningQueue
+	saveToken      func(*oauth2.Token) error
+	refreshTimeout time.Duration
 }
 
 // SetErrorLogger configures an error sink for background token operations.
 func (o *OAuthFlow) SetErrorLogger(logger func(format string, args ...any)) {
-	o.errLogger = logger
+	if logger == nil {
+		o.SetWarningSink(nil)
+		return
+	}
+	o.SetWarningSink(func(err error) { logger("warning: %v\n", err) })
 }
 
 // NewOAuthFlow creates an initialized OAuthFlow from the application Config.
@@ -52,8 +63,10 @@ func NewOAuthFlow(cfg *Config) *OAuthFlow {
 	oauthConfig.Endpoint.AuthStyle = oauth2.AuthStyleInParams
 
 	flow := &OAuthFlow{
-		config: oauthConfig,
-		appCfg: cfg,
+		config:         oauthConfig,
+		appCfg:         cfg,
+		saveToken:      cfg.SetToken,
+		refreshTimeout: silentRefreshTimeout,
 	}
 	flow.loginFn = flow.RunInteractiveLogin
 	return flow
@@ -95,13 +108,21 @@ func (o *OAuthFlow) TokenSource(ctx context.Context, token *oauth2.Token) oauth2
 
 // Client returns an authenticated HTTP client that automatically refreshes tokens and saves them.
 func (o *OAuthFlow) Client(ctx context.Context, token *oauth2.Token) (*http.Client, oauth2.TokenSource) {
-	ts := o.TokenSource(ctx, token)
+	// TokenSource retains its context across refreshes, so a context deadline
+	// here would expire the whole client. Bound each token HTTP request instead,
+	// retaining parent cancellation and any existing shorter client timeout.
+	tokenClient := *oauth2.NewClient(ctx, nil)
+	if tokenClient.Timeout == 0 || tokenClient.Timeout > o.refreshTimeout {
+		tokenClient.Timeout = o.refreshTimeout
+	}
+	tokenCtx := context.WithValue(ctx, oauth2.HTTPClient, &tokenClient)
+	ts := o.TokenSource(tokenCtx, token)
 	// Wrap token source to persist refreshed token if it changes
 	persistingTS := &persistingTokenSource{
 		src:       ts,
-		cfg:       o.appCfg,
+		saveToken: o.saveToken,
 		lastTok:   token,
-		errLogger: o.errLogger,
+		warn:      o.warnings.publish,
 	}
 	return oauth2.NewClient(ctx, persistingTS), persistingTS
 }
@@ -109,9 +130,9 @@ func (o *OAuthFlow) Client(ctx context.Context, token *oauth2.Token) (*http.Clie
 type persistingTokenSource struct {
 	mu        sync.Mutex
 	src       oauth2.TokenSource
-	cfg       *Config
+	saveToken func(*oauth2.Token) error
 	lastTok   *oauth2.Token
-	errLogger func(format string, args ...any)
+	warn      func(error)
 }
 
 func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
@@ -122,13 +143,15 @@ func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 		return nil, err
 	}
 
-	if p.lastTok == nil || tok.AccessToken != p.lastTok.AccessToken {
-		if err := p.cfg.SetToken(tok); err != nil {
-			if p.errLogger != nil {
-				p.errLogger("warning: failed to save refreshed Spotify token: %v\n", err)
+	if p.lastTok == nil || tok.AccessToken != p.lastTok.AccessToken || tok.RefreshToken != p.lastTok.RefreshToken || tok.TokenType != p.lastTok.TokenType || !tok.Expiry.Equal(p.lastTok.Expiry) {
+		// Each refresh gets one persistence attempt. A filesystem failure is a
+		// warning; it must not turn every authenticated request into another save.
+		last := *tok
+		p.lastTok = &last
+		if err := p.saveToken(tok); err != nil {
+			if p.warn != nil {
+				p.warn(fmt.Errorf("failed to save refreshed Spotify token: %w", err))
 			}
-		} else {
-			p.lastTok = tok
 		}
 	}
 
@@ -162,7 +185,9 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 
 	fmt.Println("Launching browser to authenticate with Spotify...")
 	fmt.Printf("If your browser does not open automatically, visit this URL:\n\n%s\n\n", authURL)
-	_ = OpenBrowser(authURL)
+	if err := OpenBrowser(authURL); err != nil {
+		fmt.Println("Could not open the browser automatically; use the URL above.")
+	}
 
 	select {
 	case res := <-callback.Results:
@@ -195,22 +220,38 @@ func (o *OAuthFlow) RunInteractiveLogin(ctx context.Context) (*oauth2.Token, err
 // EnsureToken returns a valid OAuth token, refreshing it silently if expired,
 // or initiating an interactive browser login if no token exists or if refresh is rejected.
 func (o *OAuthFlow) EnsureToken(ctx context.Context) (*oauth2.Token, error) {
-	tok := o.appCfg.CurrentToken()
-	if tok == nil || tok.RefreshToken == "" {
+	tok, err := o.SilentRefresh(ctx)
+	if errors.Is(err, ErrReauthenticationRequired) {
 		return o.interactiveLogin(ctx)
 	}
+	return tok, err
+}
 
-	if tok.Valid() {
+// SilentRefresh returns a usable token without prompting for human interaction.
+// Token endpoint failures only require login when OAuth reports invalid_grant.
+func (o *OAuthFlow) SilentRefresh(ctx context.Context) (*oauth2.Token, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	tok := o.appCfg.CurrentToken()
+	if tok != nil && tok.Valid() {
 		return tok, nil
 	}
+	if tok == nil || tok.RefreshToken == "" {
+		return nil, ErrReauthenticationRequired
+	}
 
-	fmt.Println("Refreshing Spotify session...")
-	_, ts := o.Client(ctx, tok)
-	refreshed, err := ts.Token()
+	refreshCtx, cancel := context.WithTimeout(ctx, o.refreshTimeout)
+	defer cancel()
+	refreshed, err := o.TokenSource(refreshCtx, tok).Token()
 	if err != nil {
+		if err := refreshCtx.Err(); err != nil {
+			return nil, fmt.Errorf("failed to refresh Spotify session: %w", err)
+		}
 		var retrieveErr *oauth2.RetrieveError
-		if errors.As(err, &retrieveErr) {
-			return o.interactiveLogin(ctx)
+		if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" &&
+			(retrieveErr.Response == nil || retrieveErr.Response.StatusCode != http.StatusTooManyRequests && retrieveErr.Response.StatusCode < http.StatusInternalServerError) {
+			return nil, ErrReauthenticationRequired
 		}
 		return nil, fmt.Errorf("failed to refresh Spotify session: %w", err)
 	}
@@ -219,14 +260,17 @@ func (o *OAuthFlow) EnsureToken(ctx context.Context) (*oauth2.Token, error) {
 		refreshed.RefreshToken = tok.RefreshToken
 	}
 
-	if err := o.appCfg.SetToken(refreshed); err != nil {
-		return nil, fmt.Errorf("failed to save refreshed token: %w", err)
+	if err := o.saveToken(refreshed); err != nil {
+		o.warnings.publish(fmt.Errorf("failed to save refreshed Spotify token: %w", err))
 	}
 
 	return refreshed, nil
 }
 
 func (o *OAuthFlow) interactiveLogin(ctx context.Context) (*oauth2.Token, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if o.loginFn != nil {
 		return o.loginFn(ctx)
 	}

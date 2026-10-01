@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,9 +68,9 @@ func TestGetAuthURL(t *testing.T) {
 
 func TestPKCEExchangeAndRefresh(t *testing.T) {
 	verifier := oauth2.GenerateVerifier()
-	var calls int
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		if err := r.ParseForm(); err != nil {
 			t.Error(err)
@@ -102,8 +103,8 @@ func TestPKCEExchangeAndRefresh(t *testing.T) {
 	}
 	tok.Expiry = time.Now().Add(-time.Second)
 	refreshed, err := flow.TokenSource(context.Background(), tok).Token()
-	if err != nil || refreshed.AccessToken != "refreshed" || calls != 2 {
-		t.Fatalf("refresh=%v err=%v calls=%d", refreshed, err, calls)
+	if err != nil || refreshed.AccessToken != "refreshed" || calls.Load() != 2 {
+		t.Fatalf("refresh=%v err=%v calls=%d", refreshed, err, calls.Load())
 	}
 }
 
@@ -220,7 +221,9 @@ func TestEnsureTokenExpiredSuccess(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = r.ParseForm()
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
 		if r.Form.Get("grant_type") != "refresh_token" {
 			t.Errorf("unexpected grant_type: %s", r.Form.Get("grant_type"))
 		}
@@ -352,10 +355,10 @@ func TestPersistingTokenSourceErrorLogger(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/dev/null/cannot_exist")
 	cfg := DefaultConfig()
 
-	var loggedWarning string
+	loggedWarnings := make(chan string, 1)
 	flow := NewOAuthFlow(cfg)
 	flow.SetErrorLogger(func(format string, args ...any) {
-		loggedWarning = fmt.Sprintf(format, args...)
+		loggedWarnings <- fmt.Sprintf(format, args...)
 	})
 
 	initialTok := &oauth2.Token{AccessToken: "token-1", Expiry: time.Now().Add(time.Hour)}
@@ -363,9 +366,9 @@ func TestPersistingTokenSourceErrorLogger(t *testing.T) {
 
 	pts := &persistingTokenSource{
 		src:       &staticTokenSource{tok: newTok},
-		cfg:       cfg,
+		saveToken: cfg.SetToken,
 		lastTok:   initialTok,
-		errLogger: flow.errLogger,
+		warn:      flow.warnings.publish,
 	}
 
 	tok, err := pts.Token()
@@ -375,14 +378,24 @@ func TestPersistingTokenSourceErrorLogger(t *testing.T) {
 	if tok.AccessToken != "token-2" {
 		t.Fatalf("expected token-2, got %s", tok.AccessToken)
 	}
-	if !strings.Contains(loggedWarning, "failed to save refreshed Spotify token") {
-		t.Fatalf("expected logged warning in errLogger sink, got %q", loggedWarning)
+	select {
+	case warning := <-loggedWarnings:
+		if !strings.Contains(warning, "failed to save refreshed Spotify token") {
+			t.Fatalf("expected persistence warning, got %q", warning)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("logger did not receive persistence warning")
 	}
 
-	// When errLogger is nil, no panic and silent
-	pts.errLogger = nil
+	// An absent observer must not interfere with token refresh.
+	flow.SetErrorLogger(nil)
 	pts.lastTok = initialTok
 	if _, err := pts.Token(); err != nil {
 		t.Fatalf("unexpected error with nil logger: %v", err)
+	}
+	pts.warn = nil
+	pts.lastTok = initialTok
+	if _, err := pts.Token(); err != nil {
+		t.Fatalf("unexpected error with nil warning publisher: %v", err)
 	}
 }
