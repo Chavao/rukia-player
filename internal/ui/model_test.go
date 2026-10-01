@@ -95,7 +95,7 @@ func TestModelPlaybackChangedMsg(t *testing.T) {
 	if model.isPlaying || !model.playbackPending {
 		t.Fatal("first key must optimistically pause playback")
 	}
-	model.Update(playbackChangedMsg{playing: false})
+	model.Update(playbackChangedMsg{version: model.requestedVersion, playing: false})
 	if model.isPlaying || model.playbackPending || model.confirmedPlaying {
 		t.Fatal("successful pause must confirm the optimistic state")
 	}
@@ -103,7 +103,7 @@ func TestModelPlaybackChangedMsg(t *testing.T) {
 	if !model.isPlaying {
 		t.Fatal("second key must optimistically resume playback")
 	}
-	model.Update(playbackChangedMsg{playing: true, err: assertErr("failed")})
+	model.Update(playbackChangedMsg{version: model.requestedVersion, playing: true, err: assertErr("failed")})
 	if !model.desiredPlaying || model.playbackPending || !model.playbackReconcile {
 		t.Fatal("failed resume must preserve intent and request reconciliation")
 	}
@@ -151,7 +151,7 @@ func TestPlaybackToggleSequences(t *testing.T) {
 			// The first command is the only one allowed to run while pending.
 			firstMsg := firstCmd()
 			if tc.firstFails {
-				firstMsg = playbackChangedMsg{playing: !tc.initial, err: assertErr("failed")}
+				firstMsg = playbackChangedMsg{version: model.requestedVersion, playing: !tc.initial, err: assertErr("failed")}
 			}
 			_, next := model.Update(firstMsg)
 			if tc.firstFails {
@@ -189,11 +189,11 @@ func TestRapidPlaybackTogglesAreSerialized(t *testing.T) {
 	if !model.isPlaying || !model.playbackPending {
 		t.Fatal("second toggle must update the visible state while first command is pending")
 	}
-	_, cmd := model.Update(playbackChangedMsg{playing: false})
+	_, cmd := model.Update(playbackChangedMsg{version: model.requestedVersion, playing: false})
 	if !model.playbackPending || !model.isPlaying || cmd == nil {
 		t.Fatal("successful pause must schedule the queued resume")
 	}
-	model.Update(playbackChangedMsg{playing: true})
+	model.Update(playbackChangedMsg{version: model.requestedVersion, playing: true})
 	if model.playbackPending || !model.confirmedPlaying || !model.isPlaying {
 		t.Fatal("queued resume must complete in order")
 	}
@@ -213,15 +213,12 @@ func TestFailedPlaybackReconcilesRemoteStateAndPreservesNewIntent(t *testing.T) 
 	model.Update(tea.KeyMsg{Type: tea.KeySpace})
 	model.Update(tea.KeyMsg{Type: tea.KeySpace})
 	model.Update(tea.KeyMsg{Type: tea.KeySpace})
-	_, cmd := model.Update(playbackChangedMsg{playing: false, err: assertErr("offline")})
-	batch, ok := cmd().(tea.BatchMsg)
-	if !ok || len(batch) != 2 {
-		t.Fatalf("expected error timer and immediate poll, got %T", cmd())
-	}
+	_, cmd := model.Update(playbackChangedMsg{version: model.requestedVersion, playing: false, err: assertErr("offline")})
 	if polls != 0 {
 		t.Fatal("poll ran synchronously in Update")
 	}
-	model.Update(batch[1]())
+	// A superseded command failure reconciles without surfacing an obsolete error.
+	model.Update(cmd())
 	if polls != 1 {
 		t.Fatalf("expected immediate poll, got %d", polls)
 	}
@@ -239,7 +236,7 @@ func TestLaterPollReconcilesFailedPlaybackIntent(t *testing.T) {
 	}
 	model := NewModel(mock, nil, nil, nil, "device")
 	model.Update(tea.KeyMsg{Type: tea.KeySpace})
-	model.Update(playbackChangedMsg{playing: false, err: assertErr("offline")})
+	model.Update(playbackChangedMsg{version: model.requestedVersion, playing: false, err: assertErr("offline")})
 	model.Update(playbackStateMsg(&spotify.PlaybackState{IsPlaying: true}))
 	model.Update(playbackStateMsg(&spotify.PlaybackState{IsPlaying: true}))
 	if !model.desiredPlaying || !model.confirmedPlaying || model.isPlaying != model.confirmedPlaying {
@@ -286,7 +283,7 @@ func TestTogglePlayPauseCmdRetriesOnTransientError(t *testing.T) {
 		pauseFunc: func(ctx context.Context, deviceID string) error {
 			attempts++
 			if attempts < 3 {
-				return assertErr("temporary glitch")
+				return transientNetworkError{}
 			}
 			return nil
 		},
@@ -394,14 +391,14 @@ func TestRemoteActionPollingPolicy(t *testing.T) {
 
 	// Success cases: only "play track" should trigger an immediate poll
 	for _, action := range []string{"change volume", "toggle shuffle", "toggle repeat"} {
-		_, cmd := model.Update(actionResultMsg{action: action})
+		_, cmd := model.Update(actionResultMsg{version: model.requestedVersion, action: action})
 		if cmd != nil {
 			t.Fatalf("%s unexpectedly scheduled immediate poll on success", action)
 		}
 	}
 
 	// "play track" success triggers immediate poll to sync track info
-	_, playCmd := model.Update(actionResultMsg{action: "play track"})
+	_, playCmd := model.Update(actionResultMsg{version: model.requestedVersion, action: "play track"})
 	if playCmd == nil {
 		t.Fatal("play track success must schedule immediate poll")
 	}
@@ -410,23 +407,16 @@ func TestRemoteActionPollingPolicy(t *testing.T) {
 		t.Fatalf("expected 1 poll from play track success, got %d", polls)
 	}
 
-	// Failure cases: all actions must schedule immediate reconciliation poll
-	for _, action := range []string{"play track", "change volume", "toggle shuffle", "toggle repeat"} {
+	// Playback and mode failures schedule immediate reconciliation; volume uses the periodic safety net.
+	for _, action := range []string{"play track", "toggle shuffle", "toggle repeat"} {
 		pollsBefore := polls
-		_, cmd := model.Update(actionResultMsg{action: action, err: assertErr("failed")})
+		_, cmd := model.Update(actionResultMsg{version: model.requestedVersion, action: action, err: assertErr("failed")})
 		if cmd == nil {
 			t.Fatalf("%s failure did not schedule reconciliation poll", action)
 		}
-		// Execute batch command
+		// Execute the reconciliation poll without waiting for the unrelated error timer.
 		if batch, ok := cmd().(tea.BatchMsg); ok {
-			for _, c := range batch {
-				if c != nil {
-					msg := c()
-					if _, isPoll := msg.(playbackStateMsg); isPoll {
-						model.Update(msg)
-					}
-				}
-			}
+			model.Update(batch[len(batch)-1]())
 		} else {
 			model.Update(cmd())
 		}
@@ -506,7 +496,7 @@ func TestModelVolumePersistence(t *testing.T) {
 	if cfg.CurrentVolume() != 0 {
 		t.Fatal("Update persisted volume synchronously")
 	}
-	_, cmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load()})
+	_, cmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load(), volume: model.volume})
 	if cmd == nil {
 		t.Fatal("expected persistence command")
 	}
@@ -538,7 +528,7 @@ func TestVolumePersistenceFailureAndExit(t *testing.T) {
 	if model.volume != 0 || settings.calls != 0 {
 		t.Fatal("volume zero must update only in model before command")
 	}
-	_, cmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load()})
+	_, cmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load(), volume: model.volume})
 	model.Update(cmd())
 	if model.err == nil || !strings.Contains(model.err.Error(), "failed to save volume") {
 		t.Fatalf("missing persistence error: %v", model.err)
@@ -559,13 +549,13 @@ func TestStaleVolumePersistenceDoesNotOverwriteLatestValue(t *testing.T) {
 	settings := &volumeSettingsStub{volume: 0}
 	model := NewModel(nil, nil, nil, nil, "", settings)
 	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
-	_, oldCmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load()})
+	_, oldCmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load(), volume: model.volume})
 	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
 	model.Update(oldCmd())
 	if settings.calls != 0 {
 		t.Fatal("stale persistence wrote an older volume")
 	}
-	_, latestCmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load()})
+	_, latestCmd := model.Update(volumePersistMsg{generation: model.volumeGeneration.Load(), volume: model.volume})
 	model.Update(latestCmd())
 	if settings.calls != 1 || settings.volume != 10 {
 		t.Fatalf("persisted %d after %d calls, want 10 after one call", settings.volume, settings.calls)
@@ -647,7 +637,7 @@ func TestTrackSelectionUpdatesPlaybackStateMachine(t *testing.T) {
 	}
 
 	// Play track succeeds remotely
-	_, nextCmd := model.Update(actionResultMsg{action: "play track", err: nil})
+	_, nextCmd := model.Update(actionResultMsg{version: model.requestedVersion, action: "play track", err: nil})
 	if nextCmd == nil {
 		t.Fatal("expected pause command after play track completed with desiredPlaying=false")
 	}

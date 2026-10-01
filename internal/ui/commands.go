@@ -2,7 +2,10 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"github.com/Chavao/rukia-player/internal/spotify"
 	tea "github.com/charmbracelet/bubbletea"
+	"net"
 	"time"
 )
 
@@ -10,37 +13,20 @@ func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID
 	version := m.requestedVersion
+	parent := m.ctx
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
 
-		var err error
-		backoffs := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond}
-		for attempt := 0; attempt <= len(backoffs); attempt++ {
+		err := retryPlaybackControl(ctx, func() error {
+			if client == nil {
+				return nil
+			}
 			if shouldPlay {
-				if client != nil {
-					err = client.Resume(ctx, deviceID)
-				}
-			} else {
-				if client != nil {
-					err = client.Pause(ctx, deviceID)
-				}
+				return client.Resume(ctx, deviceID)
 			}
-			if err == nil {
-				break
-			}
-			if version < m.playbackVersion.Load() {
-				// Abort retries if superseded by a newer user action
-				break
-			}
-			if attempt < len(backoffs) {
-				select {
-				case <-time.After(backoffs[attempt]):
-				case <-ctx.Done():
-					return playbackChangedMsg{version: version, playing: shouldPlay, err: ctx.Err()}
-				}
-			}
-		}
+			return client.Pause(ctx, deviceID)
+		}, func() bool { return version < m.playbackVersion.Load() }, waitPlaybackBackoff)
 		return playbackChangedMsg{version: version, playing: shouldPlay, err: err}
 	}
 }
@@ -48,41 +34,45 @@ func (m *Model) togglePlayPauseCmd(shouldPlay bool) tea.Cmd {
 func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID
+	version, parent := m.requestedVersion, m.ctx
 	uri := ""
 	if m.playlist != nil {
 		uri = m.playlist.URI
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 		defer cancel()
 
 		var err error
 		if client != nil && uri != "" {
 			err = client.PlayPlaylist(ctx, deviceID, uri, idx)
 		}
-		return actionResultMsg{action: "play track", err: err}
+		return actionResultMsg{version: version, action: "play track", err: err}
 	}
 }
 
 func (m *Model) setVolumeCmd(vol int) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID
+	parent := m.ctx
+	generation := m.volumeGeneration.Load()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 		defer cancel()
 		var err error
 		if client != nil {
 			err = client.SetVolume(ctx, deviceID, vol)
 		}
-		return actionResultMsg{action: "change volume", err: err}
+		return actionResultMsg{generation: generation, action: "change volume", err: err}
 	}
 }
 
 func (m *Model) setShuffleCmd(shuf bool) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID
+	parent := m.ctx
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 		defer cancel()
 		var err error
 		if client != nil {
@@ -95,8 +85,9 @@ func (m *Model) setShuffleCmd(shuf bool) tea.Cmd {
 func (m *Model) setRepeatCmd(mode string) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID
+	parent := m.ctx
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 		defer cancel()
 		var err error
 		if client != nil {
@@ -104,4 +95,25 @@ func (m *Model) setRepeatCmd(mode string) tea.Cmd {
 		}
 		return actionResultMsg{action: "toggle repeat", err: err}
 	}
+}
+
+// shouldRetryPlaybackControl permits only selected service failures and transient
+// network failures. Rate limits and all unknown errors remain caller-visible.
+func shouldRetryPlaybackControl(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var apiErr *spotify.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.RetryAfter > 0 {
+			return false
+		}
+		switch apiErr.StatusCode {
+		case 500, 502, 503, 504:
+			return true
+		}
+		return false
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr) && (networkErr.Timeout() || networkErr.Temporary())
 }
