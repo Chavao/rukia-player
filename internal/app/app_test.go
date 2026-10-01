@@ -186,6 +186,10 @@ func TestFormatStartupError(t *testing.T) {
 		RetryAfter: 30 * time.Second,
 	}
 	err429 := formatStartupError("profile", apiErr)
+	var structured *spotify.APIError
+	if !errors.As(err429, &structured) || structured != apiErr {
+		t.Fatal("formatted rate limit error lost the original structured error")
+	}
 	if !strings.Contains(err429.Error(), "Spotify rate limit reached") || !strings.Contains(err429.Error(), "30s") {
 		t.Errorf("unexpected 429 error format: %v", err429)
 	}
@@ -200,5 +204,20 @@ func TestFormatStartupError(t *testing.T) {
 	genErr := formatStartupError("initialization", errors.New("network failure"))
 	if !strings.Contains(genErr.Error(), "initialization: network failure") {
 		t.Errorf("unexpected generic error format: %v", genErr)
+	}
+}
+
+func TestPrintStartupWarning(t *testing.T) {
+	warning := errors.New("token was refreshed but could not be saved")
+	var output bytes.Buffer
+	if err := printWarning(&output, warning); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "token was refreshed but could not be saved") {
+		t.Fatalf("queued warning disappeared: %q", output.String())
+	}
+	output.Reset()
+	if err := printWarning(&output, nil); err != nil || output.Len() != 0 {
+		t.Fatal(err)
 	}
 }

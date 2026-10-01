@@ -33,7 +33,9 @@ func PrintUsage(w io.Writer) {
 }
 
 // Run orchestrates configuration, authentication, player startup, and the TUI lifecycle.
-func Run(ctx context.Context, args []string) error {
+func Run(ctx context.Context, args []string) (runErr error) {
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 	fs := flag.NewFlagSet("rukia", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
@@ -88,6 +90,13 @@ func Run(ctx context.Context, args []string) error {
 
 	// 4. Authenticate via OAuth 2.0 flow
 	oauthFlow := auth.NewOAuthFlow(cfg)
+	defer func() {
+		// Run has returned from Bubble Tea before this runs. Retain a final
+		// persistence reminder even if a UI waiter received it just before quit.
+		if err := printWarning(os.Stderr, oauthFlow.LatestWarning()); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+	}()
 	if _, err := oauthFlow.EnsureToken(ctx); err != nil {
 		return fmt.Errorf("spotify login failed: %w", err)
 	}
@@ -111,6 +120,10 @@ func Run(ctx context.Context, args []string) error {
 			if _, err := oauthFlow.RunInteractiveLogin(ctx); err != nil {
 				return fmt.Errorf("authentication failed: %w", err)
 			}
+			// Human interaction does not consume the network startup budget.
+			cancelStartup()
+			startupCtx, cancelStartup = context.WithTimeout(ctx, 30*time.Second)
+			defer cancelStartup()
 			httpClient, _ = oauthFlow.Client(ctx, cfg.CurrentToken())
 			spotifyClient = spotify.NewClient(httpClient)
 			retryUserCtx, cancelRetryUser := context.WithTimeout(startupCtx, 5*time.Second)
@@ -125,14 +138,23 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	// 6. Start PulseAudio audio sink
-	playerEngine := player.NewEngine("rukia")
+	playerEngine, err := configuredEngine(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to configure Spotify Connect identity: %w", err)
+	}
 	if volume := cfg.CurrentVolume(); volume >= 0 {
 		playerEngine.SetVolume(volume)
 	}
 	if err := playerEngine.Start(ctx, user.ID, cfg.CurrentToken().AccessToken); err != nil {
 		fmt.Printf("Notice: PulseAudio audio sink initialization failed (%v)\n", err)
 	}
-	defer playerEngine.Close()
+	defer func() {
+		// Cancel pending UI and OAuth requests before releasing the audio daemon.
+		cancelRun()
+		if err := playerEngine.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("failed to shut down audio player: %w", err))
+		}
+	}()
 
 	// 7. Fetch playlist tracks
 	fmt.Printf("Loading playlist %s...\n", playlistID)
@@ -163,11 +185,12 @@ func Run(ctx context.Context, args []string) error {
 
 	// 10. Start Bubble Tea TUI
 	model := ui.NewModel(spotifyClient, playerEngine, user, playlist, targetDeviceID, cfg)
+	model.SetWarningChannel(ctx, oauthFlow.Warnings())
 	if playbackErr != nil {
 		model.SetPlaybackInitialState(false)
 		model.SetInitialError(playbackErr)
 	}
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
@@ -176,11 +199,28 @@ func Run(ctx context.Context, args []string) error {
 	return nil
 }
 
+func printWarning(w io.Writer, warning error) error {
+	if warning != nil {
+		if _, err := fmt.Fprintf(w, "Warning: %v\n", warning); err != nil {
+			return fmt.Errorf("failed to display Spotify token persistence warning: %w", err)
+		}
+	}
+	return nil
+}
+
+func configuredEngine(cfg *auth.Config) (*player.Engine, error) {
+	deviceID, err := cfg.EnsureDeviceID(player.LegacyDeviceID())
+	if err != nil {
+		return nil, err
+	}
+	return player.NewEngine("rukia", player.WithDeviceID(deviceID)), nil
+}
+
 func formatStartupError(phase string, err error) error {
 	var apiErr *spotify.APIError
 	if errors.As(err, &apiErr) {
 		if apiErr.StatusCode == http.StatusTooManyRequests && apiErr.RetryAfter > 0 {
-			return fmt.Errorf("%s: Spotify rate limit reached (Retry-After: %v); please wait before retrying", phase, apiErr.RetryAfter)
+			return fmt.Errorf("%s: Spotify rate limit reached (Retry-After: %v); please wait before retrying: %w", phase, apiErr.RetryAfter, err)
 		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
