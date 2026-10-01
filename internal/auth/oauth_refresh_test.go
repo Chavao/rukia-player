@@ -282,6 +282,105 @@ func TestRuntimeRefreshRequestsHavePerOperationDeadline(t *testing.T) {
 	}
 }
 
+func TestRuntimeRefreshHonorsSpotifyRequestDeadline(t *testing.T) {
+	entered := make(chan struct{})
+	tokenClient := &http.Client{Transport: refreshRoundTripper(func(r *http.Request) (*http.Response, error) {
+		close(entered)
+		deadline, ok := r.Context().Deadline()
+		if !ok {
+			t.Error("runtime refresh request has no deadline")
+		}
+		<-r.Context().Done()
+		if ok && time.Until(deadline) > 200*time.Millisecond {
+			t.Errorf("refresh inherited broader deadline: %v", time.Until(deadline))
+		}
+		return nil, r.Context().Err()
+	})}
+	parent := context.WithValue(context.Background(), oauth2.HTTPClient, tokenClient)
+	flow := NewOAuthFlow(expiredRefreshConfig())
+	flow.refreshTimeout = time.Second
+	apiClient, _ := flow.Client(parent, flow.appCfg.CurrentToken())
+
+	requestCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, "https://api.spotify.test/me/player", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err = apiClient.Do(req)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("request err=%v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("request deadline did not bound token refresh: %v", elapsed)
+	}
+	select {
+	case <-entered:
+	default:
+		t.Fatal("request did not attempt runtime token refresh")
+	}
+}
+
+func TestConcurrentRuntimeRefreshWaitHonorsShortRequestDeadline(t *testing.T) {
+	entered := make(chan struct{})
+	tokenClient := &http.Client{Transport: refreshRoundTripper(func(r *http.Request) (*http.Response, error) {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+	parent := context.WithValue(context.Background(), oauth2.HTTPClient, tokenClient)
+	flow := NewOAuthFlow(expiredRefreshConfig())
+	flow.refreshTimeout = time.Second
+	apiClient, _ := flow.Client(parent, flow.appCfg.CurrentToken())
+
+	longCtx, cancelLong := context.WithCancel(context.Background())
+	defer cancelLong()
+	longReq, err := http.NewRequestWithContext(longCtx, http.MethodGet, "https://api.spotify.test/long", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	longDone := make(chan error, 1)
+	go func() {
+		_, err := apiClient.Do(longReq)
+		longDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("long request did not start token refresh")
+	}
+
+	shortCtx, cancelShort := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelShort()
+	shortReq, err := http.NewRequestWithContext(shortCtx, http.MethodGet, "https://api.spotify.test/short", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err = apiClient.Do(shortReq)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("short request err=%v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("short request waited for another refresh past its deadline: %v", elapsed)
+	}
+
+	cancelLong()
+	select {
+	case err := <-longDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("long request err=%v, want canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("long refresh ignored cancellation")
+	}
+}
+
 func TestRuntimeRefreshDeadlineStopsBlockedEndpoint(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})

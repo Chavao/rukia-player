@@ -107,47 +107,121 @@ func (o *OAuthFlow) TokenSource(ctx context.Context, token *oauth2.Token) oauth2
 }
 
 // Client returns an authenticated HTTP client that automatically refreshes tokens and saves them.
+// Runtime refreshes are derived from each outgoing request context, so a 2-3 second
+// Spotify operation cannot be extended by the broader refresh timeout.
 func (o *OAuthFlow) Client(ctx context.Context, token *oauth2.Token) (*http.Client, oauth2.TokenSource) {
-	// TokenSource retains its context across refreshes, so a context deadline
-	// here would expire the whole client. Bound each token HTTP request instead,
-	// retaining parent cancellation and any existing shorter client timeout.
-	tokenClient := *oauth2.NewClient(ctx, nil)
-	if tokenClient.Timeout == 0 || tokenClient.Timeout > o.refreshTimeout {
-		tokenClient.Timeout = o.refreshTimeout
-	}
-	tokenCtx := context.WithValue(ctx, oauth2.HTTPClient, &tokenClient)
-	ts := o.TokenSource(tokenCtx, token)
-	// Wrap token source to persist refreshed token if it changes
+	baseClient := oauth2.NewClient(ctx, nil)
+	tokenClient := *baseClient
 	persistingTS := &persistingTokenSource{
-		src:       ts,
-		saveToken: o.saveToken,
-		lastTok:   token,
-		warn:      o.warnings.publish,
+		flow:            o,
+		parent:          ctx,
+		tokenHTTPClient: &tokenClient,
+		saveToken:       o.saveToken,
+		lastTok:         token,
+		warn:            o.warnings.publish,
 	}
-	return oauth2.NewClient(ctx, persistingTS), persistingTS
+
+	baseTransport := baseClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	apiClient := *baseClient
+	apiClient.Transport = &requestBoundOAuthTransport{
+		base:   baseTransport,
+		source: persistingTS,
+	}
+	return &apiClient, persistingTS
 }
 
-type persistingTokenSource struct {
-	mu        sync.Mutex
-	src       oauth2.TokenSource
-	saveToken func(*oauth2.Token) error
-	lastTok   *oauth2.Token
-	warn      func(error)
+type requestBoundOAuthTransport struct {
+	base   http.RoundTripper
+	source *persistingTokenSource
 }
 
-func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	tok, err := p.src.Token()
+func (t *requestBoundOAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	tok, err := t.source.TokenContext(req.Context())
 	if err != nil {
 		return nil, err
 	}
+	clone := req.Clone(req.Context())
+	clone.Header = req.Header.Clone()
+	tok.SetAuthHeader(clone)
+	return t.base.RoundTrip(clone)
+}
 
-	if p.lastTok == nil || tok.AccessToken != p.lastTok.AccessToken || tok.RefreshToken != p.lastTok.RefreshToken || tok.TokenType != p.lastTok.TokenType || !tok.Expiry.Equal(p.lastTok.Expiry) {
+type persistingTokenSource struct {
+	mu              sync.Mutex
+	gateOnce        sync.Once
+	refreshGate     chan struct{}
+	flow            *OAuthFlow
+	parent          context.Context
+	tokenHTTPClient *http.Client
+	source          func(context.Context, *oauth2.Token) oauth2.TokenSource
+	saveToken       func(*oauth2.Token) error
+	lastTok         *oauth2.Token
+	warn            func(error)
+}
+
+func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
+	return p.TokenContext(p.parent)
+}
+
+func (p *persistingTokenSource) TokenContext(ctx context.Context) (*oauth2.Token, error) {
+	if tok := p.validCachedToken(); tok != nil {
+		return tok, nil
+	}
+
+	p.gateOnce.Do(func() { p.refreshGate = make(chan struct{}, 1) })
+	select {
+	case p.refreshGate <- struct{}{}:
+		defer func() { <-p.refreshGate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	// Another request may have completed the refresh while this request waited.
+	if tok := p.validCachedToken(); tok != nil {
+		return tok, nil
+	}
+
+	p.mu.Lock()
+	var previous *oauth2.Token
+	if p.lastTok != nil {
+		copy := *p.lastTok
+		previous = &copy
+	}
+	p.mu.Unlock()
+
+	refreshCtx, cancel := context.WithTimeout(ctx, p.flow.refreshTimeout)
+	defer cancel()
+	if p.tokenHTTPClient != nil {
+		refreshCtx = context.WithValue(refreshCtx, oauth2.HTTPClient, p.tokenHTTPClient)
+	}
+
+	source := p.source
+	if source == nil {
+		source = p.flow.TokenSource
+	}
+	tok, err := source(refreshCtx, previous).Token()
+	if err != nil {
+		if ctxErr := refreshCtx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	if tok.RefreshToken == "" && previous != nil && previous.RefreshToken != "" {
+		tok.RefreshToken = previous.RefreshToken
+	}
+
+	changed := previous == nil || tok.AccessToken != previous.AccessToken || tok.RefreshToken != previous.RefreshToken || tok.TokenType != previous.TokenType || !tok.Expiry.Equal(previous.Expiry)
+	last := *tok
+	p.mu.Lock()
+	p.lastTok = &last
+	p.mu.Unlock()
+
+	if changed && p.saveToken != nil {
 		// Each refresh gets one persistence attempt. A filesystem failure is a
 		// warning; it must not turn every authenticated request into another save.
-		last := *tok
-		p.lastTok = &last
 		if err := p.saveToken(tok); err != nil {
 			if p.warn != nil {
 				p.warn(fmt.Errorf("failed to save refreshed Spotify token: %w", err))
@@ -156,6 +230,16 @@ func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 	}
 
 	return tok, nil
+}
+
+func (p *persistingTokenSource) validCachedToken() *oauth2.Token {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastTok == nil || !p.lastTok.Valid() {
+		return nil
+	}
+	copy := *p.lastTok
+	return &copy
 }
 
 // RunInteractiveLogin runs the full authorization code flow:
