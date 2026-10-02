@@ -36,8 +36,10 @@ func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 	deviceID := m.deviceID
 	version, parent := m.requestedVersion, m.ctx
 	uri := ""
+	offset := 0
 	if m.playlist != nil {
 		uri = m.playlist.URI
+		offset = m.playlist.Tracks[idx].PlaylistPosition
 	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
@@ -45,7 +47,7 @@ func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 
 		var err error
 		if client != nil && uri != "" {
-			err = client.PlayPlaylist(ctx, deviceID, uri, idx)
+			err = client.PlayPlaylist(ctx, deviceID, uri, offset)
 		}
 		return actionResultMsg{version: version, action: "play track", err: err}
 	}
