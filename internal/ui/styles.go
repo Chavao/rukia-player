@@ -41,6 +41,9 @@ var (
 				Foreground(ColorTextDim).
 				Align(lipgloss.Right)
 
+	TrackUnplayableNormal = lipgloss.NewStyle().
+				Foreground(ColorDarkMuted)
+
 	TrackRowSelected = lipgloss.NewStyle().
 				Foreground(ColorCyan).
 				Background(ColorSelectionBg).

@@ -109,6 +109,30 @@ func TestRenderTrackTableHighlightsEntireSelectedRow(t *testing.T) {
 	}
 }
 
+func TestRenderTrackTableUnplayableTrack(t *testing.T) {
+	profile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+
+	unplayable := false
+	tracks := []spotify.Track{
+		{Name: "Playable", Artist: "Artist", DurationMs: 180000},
+		{Name: "Disabled", Artist: "Artist", DurationMs: 120000, IsPlayable: &unplayable},
+	}
+
+	rendered := RenderTrackTable(tracks, 0, -1, 80, 5)
+	rows := strings.Split(rendered, "\n")
+	if len(rows) < 2 {
+		t.Fatalf("expected at least 2 rows, got %d", len(rows))
+	}
+
+	// Row 1 (Disabled) should contain ColorDarkMuted (RGB: 73, 80, 87)
+	disabledRow := rows[1]
+	if !strings.Contains(disabledRow, "49;50;57") && !strings.Contains(disabledRow, "73;80;87") {
+		t.Errorf("unplayable track row must use ColorDarkMuted: %q", disabledRow)
+	}
+}
+
 func TestRenderBottomBarShuffleObservation(t *testing.T) {
 	track := &spotify.Track{Name: "Current Song", Artist: "Artist", DurationMs: 180000}
 	for _, tc := range []struct {

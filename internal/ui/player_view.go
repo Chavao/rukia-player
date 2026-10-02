@@ -115,6 +115,11 @@ func RenderTrackTable(tracks []spotify.Track, cursor int, playingIdx int, width 
 		if isSelected {
 			fullRow := fmt.Sprintf("%s  %s  %s", col1Padded, col2Padded, durPadded)
 			rowStr = TrackRowSelected.Render(fullRow)
+		} else if !t.CanPlay() {
+			styledCol1 := TrackUnplayableNormal.Render(col1Padded)
+			styledCol2 := TrackUnplayableNormal.Render(col2Padded)
+			styledCol3 := TrackUnplayableNormal.Render(durPadded)
+			rowStr = fmt.Sprintf("%s  %s  %s", styledCol1, styledCol2, styledCol3)
 		} else {
 			styledCol1 := TrackArtistNormal.Render(col1Padded)
 			styledCol2 := TrackTitleNormal.Render(col2Padded)
