@@ -1,10 +1,10 @@
 # Repository Guidelines
 
-Rukia is a Go terminal Spotify player.
+rukia-player is a Go terminal Spotify player.
 
 ## Project Structure & Module Organization
 
-- The executable entry point is `cmd/rukia/main.go`.
+- The executable entry point is `cmd/rukia-player/main.go`.
 - Application code is grouped under `internal/`:
     - `auth` handles Spotify authorization and configuration
     - `spotify` contains API and playlist parsing

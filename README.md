@@ -43,7 +43,7 @@ whether someone is familiar with the series.
 - **Exact Playlist Selection**: Playing a selected row starts that occurrence, including songs repeated in the same playlist. The playing checkmark stays on the acknowledged occurrence while the cursor moves independently.
 - **Unplayable Track Handling**: Tracks restricted or unavailable in the active account's market are visually dimmed in the track table and automatically bypassed during keyboard navigation.
 - **Exit Confirmation Dialog**: Modal dialog (`Ctrl+q`, `q`, `Ctrl+c`) with `<No>` and `<Yes>` confirmation buttons.
-- **Session Reuse & Migration**: Seamlessly reuses existing cached credentials from ncspot (`~/.cache/ncspot/librespot/credentials.json`) to minimize re-authentication friction for transitioning users.
+- **Internal Authentication**: Uses rukia-player's own OAuth implementation and cached streaming credentials.
 
 ## Prerequisites
 
@@ -98,11 +98,15 @@ rukia-player spotify:playlist:6UUCMxk575eDTwSWa0qQhB
 On first launch, if no Client ID is configured, `rukia-player` interactively requests:
 - **Client ID**
 
-The Client ID and access and refresh tokens are stored in `~/.config/rukia/config.json` with restricted permissions (`0600`). A client secret is not needed for new PKCE logins. Existing configurations with a client secret continue to refresh legacy tokens; the stored secret is removed after a new PKCE login.
+The Client ID and access and refresh tokens are stored in `~/.config/rukia/player/config.json` with restricted permissions (`0600`). If `XDG_CONFIG_HOME` is set, the path is `$XDG_CONFIG_HOME/rukia/player/config.json`. A client secret is not needed for new PKCE logins. Existing configurations with a client secret continue to refresh legacy tokens; the stored secret is removed after a new PKCE login.
+
+When the new file is absent, rukia-player copies its previous `~/.config/rukia/config.json` configuration to the new location, preserving tokens, device identity, volume, and playlist settings. The original file is retained; subsequent loads and saves use the new file. The same migration applies under `XDG_CONFIG_HOME`.
+
+The embedded player authenticates using rukia-player's OAuth access token and reuses only rukia-player's streaming credentials in `~/.cache/rukia/librespot/credentials.json` (or `$XDG_CACHE_HOME/rukia/librespot/credentials.json`). Credentials from other clients are never imported.
 
 Expired sessions are refreshed silently with an eight second timeout. A revoked refresh token prompts for login; rate limits, server failures, and network errors are reported without launching the browser. Token persistence warnings appear in the TUI and as a final reminder after the terminal is restored, so quitting cannot discard a warning waiting for display.
 
-Spotify Connect identity is stored as `device_id` in the same configuration. On the first launch after upgrading, Rukia saves the existing device identity derived from the current cache location. Later cache directory changes preserve that identity. An invalid stored identity is reported as a configuration error; restore a valid value or remove the field to migrate from the current cache location again.
+Spotify Connect identity is stored as `device_id` in the same configuration. On the first launch after upgrading, rukia-player saves the existing device identity derived from the current cache location. Later cache directory changes preserve that identity. An invalid stored identity is reported as a configuration error; restore a valid value or remove the field to migrate from the current cache location again.
 
 Alternatively, credentials can be provided via environment variables:
 - `SPOTIFY_CLIENT_ID`
@@ -132,7 +136,7 @@ Both `127.0.0.1` and `::1` are supported for loopback callbacks, including HTTPS
 
 Shuffle displays `[?]` until Spotify reports its state. Pressing `s` before synchronization queues your intent: an odd number of presses toggles the observed state once; an even number leaves it unchanged. Later Spotify shuffle changes are reflected in the badge.
 
-`Enter` pauses or resumes the playing occurrence when its row is selected; selecting another row starts that exact playlist position. If Spotify reports a repeated song without a confirmed local selection, Rukia leaves the row checkmark unresolved and continues showing the current song in the bottom bar. Spotify does not report occurrence identity, so external jumps or automatic transitions between identical songs cannot distinguish their rows. Exact selection uses the playlist as loaded; playlist edits made elsewhere require reloading it.
+`Enter` pauses or resumes the playing occurrence when its row is selected; selecting another row starts that exact playlist position. If Spotify reports a repeated song without a confirmed local selection, rukia-player leaves the row checkmark unresolved and continues showing the current song in the bottom bar. Spotify does not report occurrence identity, so external jumps or automatic transitions between identical songs cannot distinguish their rows. Exact selection uses the playlist as loaded; playlist edits made elsewhere require reloading it.
 
 ## Architecture
 
