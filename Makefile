@@ -1,6 +1,6 @@
 .PHONY: all build test clean install check fmt fmt-check vet test-race
 
-BINARY_NAME=rukia
+BINARY_NAME=rukia-player
 BIN_DIR=bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -X github.com/Chavao/rukia-player/internal/app.Version=$(VERSION)
@@ -11,10 +11,10 @@ all: check build
 
 build:
 	@mkdir -p $(BIN_DIR)
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/rukia
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/${BINARY_NAME}
 
 install:
-	go install -ldflags "$(LDFLAGS)" ./cmd/rukia
+	go install -ldflags "$(LDFLAGS)" ./cmd/${BINARY_NAME}
 
 fmt:
 	gofmt -s -w .
