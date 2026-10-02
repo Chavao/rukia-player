@@ -54,7 +54,7 @@ func TestStartInitialPlayback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &playbackStarterStub{transferErr: tc.transferErr, playErr: tc.playErr}
-			err := startInitialPlayback(context.Background(), stub, tc.device, "spotify:playlist:test", 7)
+			err := startInitialPlayback(context.Background(), stub, tc.device, &spotify.Playlist{URI: "spotify:playlist:test", Tracks: []spotify.Track{{PlaylistPosition: 7}}})
 			if stub.trackOffset != 7 {
 				t.Fatalf("track offset=%d, want 7", stub.trackOffset)
 			}
@@ -78,7 +78,7 @@ func TestStartInitialPlaybackRespectsDelay(t *testing.T) {
 
 	stub := &playbackStarterStub{}
 	start := time.Now()
-	err := startInitialPlayback(context.Background(), stub, "dev", "spotify:playlist:test", 0)
+	err := startInitialPlayback(context.Background(), stub, "dev", &spotify.Playlist{URI: "spotify:playlist:test", Tracks: []spotify.Track{{PlaylistPosition: 0}}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -224,5 +224,15 @@ func TestPrintStartupWarning(t *testing.T) {
 	output.Reset()
 	if err := printWarning(&output, nil); err != nil || output.Len() != 0 {
 		t.Fatal(err)
+	}
+}
+
+func TestStartInitialPlaybackEmptyPlaylist(t *testing.T) {
+	stub := &playbackStarterStub{}
+	if err := startInitialPlayback(context.Background(), stub, "device", &spotify.Playlist{URI: "spotify:playlist:test"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.calls) != 0 {
+		t.Fatalf("empty playlist made playback calls: %v", stub.calls)
 	}
 }
