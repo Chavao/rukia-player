@@ -1,8 +1,8 @@
-# rukia-player (`rukia`)
+# rukia-player
 
 A lightweight, terminal-based Spotify music player written in Golang using [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss), and [go-librespot](https://github.com/devgianlu/go-librespot).
 
-The application compiles to the command-line binary `rukia` and starts playing a specified Spotify playlist immediately upon invocation.
+The application compiles to the command-line binary `rukia-player` and starts playing a specified Spotify playlist immediately upon invocation.
 
 ## Features
 
@@ -35,7 +35,7 @@ make check  # runs formatting, vet, and race detection
 make build
 ```
 
-The compiled executable will be placed in `./bin/rukia`.
+The compiled executable will be placed in `./bin/rukia-player`.
 
 To install globally to your `$GOPATH/bin`:
 
@@ -45,28 +45,28 @@ make install
 
 ## Quick Start
 
-Run `rukia` with your desired playlist ID or URL:
+Run `rukia-player` with your desired playlist ID or URL:
 
 ```bash
-rukia '6UUCMxk575eDTwSWa0qQhB?si=fa799fec9a404660'
+rukia-player '6UUCMxk575eDTwSWa0qQhB?si=fa799fec9a404660'
 ```
 
 Or using standard Spotify playlist formats:
 
 ```bash
 # Pure ID
-rukia 6UUCMxk575eDTwSWa0qQhB
+rukia-player 6UUCMxk575eDTwSWa0qQhB
 
 # Web URL
-rukia https://open.spotify.com/playlist/6UUCMxk575eDTwSWa0qQhB
+rukia-player https://open.spotify.com/playlist/6UUCMxk575eDTwSWa0qQhB
 
 # Spotify URI
-rukia spotify:playlist:6UUCMxk575eDTwSWa0qQhB
+rukia-player spotify:playlist:6UUCMxk575eDTwSWa0qQhB
 ```
 
 ### First-Time Configuration
 
-On first launch, if no Client ID is configured, `rukia` interactively requests:
+On first launch, if no Client ID is configured, `rukia-player` interactively requests:
 - **Client ID**
 
 The Client ID and access and refresh tokens are stored in `~/.config/rukia/config.json` with restricted permissions (`0600`). A client secret is not needed for new PKCE logins. Existing configurations with a client secret continue to refresh legacy tokens; the stored secret is removed after a new PKCE login.
