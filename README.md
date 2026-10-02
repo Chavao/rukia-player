@@ -4,6 +4,32 @@ A lightweight, terminal-based Spotify music player written in Golang using [Bubb
 
 The application compiles to the command-line binary `rukia-player` and starts playing a specified Spotify playlist immediately upon invocation.
 
+## Why `rukia-player`?
+
+The project is named after Rukia Kuchiki from *Bleach*. The connection is
+thematic rather than literal: Rukia is strongly associated with precision,
+control, deliberate movement, and the named dances of Sode no Shirayuki.
+
+Those ideas map naturally to a music player. Playback is also built around
+sequence and timing: tracks move forward, pause, resume, repeat, shuffle, and
+transition while remaining under explicit user control.
+
+| Theme | Rukia / Bleach reference | How it maps to the player |
+| --- | --- | --- |
+| Rhythm and sequence | Sode no Shirayuki's techniques are expressed as named dances | A playlist is an ordered sequence of tracks, with playback moving through that sequence according to the listener's actions |
+| Precision and control | Rukia's techniques rely on deliberate, controlled execution | Playback controls are direct and predictable: play, pause, track selection, shuffle, repeat, and volume |
+| Flow between movements | Each dance is a distinct technique within the same fighting style | Individual tracks and playback states remain separate operations while forming one continuous listening session |
+| Ice and visual identity | Sode no Shirayuki is an ice-type Zanpakuto | The cyan terminal interface and restrained dark palette give `rukia-player` a cold, minimal visual identity |
+| Restraint over excess | Rukia's style emphasizes technique and composure | `rukia-player` is intentionally lightweight and focused, providing the essential music-player experience without unnecessary interface complexity |
+
+The name reflects the experience the project aims for: **controlled playback,
+rhythm, precision, and minimal distraction**.
+
+The *Bleach* references are part of the project's identity rather than its
+internal vocabulary. Packages remain conventional names such as `player`,
+`spotify`, `auth`, and `ui`, keeping the codebase understandable regardless of
+whether someone is familiar with the series.
+
 ## Features
 
 - **Native Terminal Playback**: Embeds a Spotify Connect receiver using `go-librespot` with PulseAudio/PipeWire audio output.
