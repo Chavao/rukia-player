@@ -17,6 +17,7 @@ type playbackStarterStub struct {
 	transferErr error
 	playErr     error
 	calls       []string
+	trackOffset int
 }
 
 func (s *playbackStarterStub) TransferPlayback(_ context.Context, device string, play bool) error {
@@ -24,8 +25,9 @@ func (s *playbackStarterStub) TransferPlayback(_ context.Context, device string,
 	return s.transferErr
 }
 
-func (s *playbackStarterStub) PlayPlaylist(_ context.Context, device, _ string, _ int) error {
+func (s *playbackStarterStub) PlayPlaylist(_ context.Context, device, _ string, offset int) error {
 	s.calls = append(s.calls, "play:"+device)
+	s.trackOffset = offset
 	return s.playErr
 }
 
@@ -52,7 +54,10 @@ func TestStartInitialPlayback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &playbackStarterStub{transferErr: tc.transferErr, playErr: tc.playErr}
-			err := startInitialPlayback(context.Background(), stub, tc.device, "spotify:playlist:test")
+			err := startInitialPlayback(context.Background(), stub, tc.device, "spotify:playlist:test", 7)
+			if stub.trackOffset != 7 {
+				t.Fatalf("track offset=%d, want 7", stub.trackOffset)
+			}
 			if strings.Join(stub.calls, ",") != tc.wantCalls {
 				t.Fatalf("calls=%v, want %s", stub.calls, tc.wantCalls)
 			}
@@ -73,7 +78,7 @@ func TestStartInitialPlaybackRespectsDelay(t *testing.T) {
 
 	stub := &playbackStarterStub{}
 	start := time.Now()
-	err := startInitialPlayback(context.Background(), stub, "dev", "spotify:playlist:test")
+	err := startInitialPlayback(context.Background(), stub, "dev", "spotify:playlist:test", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

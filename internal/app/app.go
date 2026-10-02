@@ -177,7 +177,11 @@ func Run(ctx context.Context, args []string) (runErr error) {
 
 	// 9. Start initial playback
 	playbackCtx, cancelPlayback := context.WithTimeout(startupCtx, 5*time.Second)
-	playbackErr := startInitialPlayback(playbackCtx, spotifyClient, targetDeviceID, playlist.URI)
+	initialTrackOffset := 0
+	if len(playlist.Tracks) > 0 {
+		initialTrackOffset = playlist.Tracks[0].PlaylistPosition
+	}
+	playbackErr := startInitialPlayback(playbackCtx, spotifyClient, targetDeviceID, playlist.URI, initialTrackOffset)
 	cancelPlayback()
 	if playbackErr != nil {
 		fmt.Printf("Notice: could not start initial playback (%v). Starting TUI for manual playback.\n", playbackErr)
@@ -189,6 +193,8 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	if playbackErr != nil {
 		model.SetPlaybackInitialState(false)
 		model.SetInitialError(playbackErr)
+	} else if len(playlist.Tracks) > 0 {
+		model.SetInitialPlaybackTrack(0)
 	}
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
 
@@ -240,7 +246,7 @@ type playbackStarter interface {
 
 var initialPlaybackDelay = 250 * time.Millisecond
 
-func startInitialPlayback(ctx context.Context, client playbackStarter, deviceID, playlistURI string) error {
+func startInitialPlayback(ctx context.Context, client playbackStarter, deviceID, playlistURI string, trackOffset int) error {
 	var transferErr error
 	if deviceID != "" {
 		transferErr = client.TransferPlayback(ctx, deviceID, true)
@@ -252,7 +258,7 @@ func startInitialPlayback(ctx context.Context, client playbackStarter, deviceID,
 			}
 		}
 	}
-	playErr := client.PlayPlaylist(ctx, deviceID, playlistURI, 0)
+	playErr := client.PlayPlaylist(ctx, deviceID, playlistURI, trackOffset)
 	if playErr != nil {
 		if transferErr != nil {
 			return fmt.Errorf("failed to start playlist: %w", errors.Join(
