@@ -12,6 +12,7 @@ The application compiles to the command-line binary `rukia` and starts playing a
 - **Flexible Playlist Arguments**: Supports raw playlist IDs, IDs with query parameters, full Spotify URLs (`open.spotify.com`), and Spotify URIs.
 - **Cyan TUI Theme**: Header stats, track listing (Artist - Album, Title, Duration), bold cyan selection text on a dark blue background, shuffle/repeat badges, and bottom progress bar with transient error notices.
 - **Exact Playlist Selection**: Playing a selected row starts that occurrence, including songs repeated in the same playlist. The playing checkmark stays on the acknowledged occurrence while the cursor moves independently.
+- **Unplayable Track Handling**: Tracks restricted or unavailable in the active account's market are visually dimmed in the track table and automatically bypassed during keyboard navigation.
 - **Exit Confirmation Dialog**: Modal dialog (`Ctrl+q`, `q`, `Ctrl+c`) with `<No>` and `<Yes>` confirmation buttons.
 - **Session Reuse & Migration**: Seamlessly reuses existing cached credentials from ncspot (`~/.cache/ncspot/librespot/credentials.json`) to minimize re-authentication friction for transitioning users.
 
