@@ -11,7 +11,7 @@ import (
 )
 
 func playbackFixture(client *mockSpotifyController) *Model {
-	return NewModel(client, nil, nil, &spotify.Playlist{URI: "spotify:playlist:example", Tracks: []spotify.Track{{ID: "zero"}, {ID: "one"}, {ID: "two"}}}, "device")
+	return NewModel(client, nil, nil, &spotify.Playlist{URI: "spotify:playlist:example", Tracks: []spotify.Track{{ID: "zero", PlaylistPosition: 0}, {ID: "one", PlaylistPosition: 1}, {ID: "two", PlaylistPosition: 2}}}, "device")
 }
 
 func playbackObservation(playing bool, id string) playbackStateMsg {

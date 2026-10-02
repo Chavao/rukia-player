@@ -30,18 +30,12 @@ func (m *Model) View() string {
 	// 2. Track list
 	trackList := RenderTrackTable(tracks, m.cursor, m.playingIdx, m.width, tableH)
 
-	// 3. Current playing track for bottom bar
-	var curTrack *spotify.Track
-	if len(tracks) > 0 && m.playingIdx >= 0 && m.playingIdx < len(tracks) {
-		curTrack = &tracks[m.playingIdx]
-	}
-
-	// 4. Bottom bar
+	// 3. Bottom bar
 	errStr := ""
 	if m.err != nil {
 		errStr = m.err.Error()
 	}
-	bottom := RenderBottomBar(curTrack, m.progressMs, m.volume, m.isPlaying, m.shuffle, m.repeatMode, m.width, errStr)
+	bottom := RenderBottomBar(m.currentTrack, m.progressMs, m.volume, m.isPlaying, m.shuffle, m.shuffleKnown, m.repeatMode, m.width, errStr)
 
 	baseView := lipgloss.JoinVertical(
 		lipgloss.Left,

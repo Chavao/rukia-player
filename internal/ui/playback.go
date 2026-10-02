@@ -30,6 +30,26 @@ func (m *Model) pollPlaybackCmd() tea.Cmd {
 	}
 }
 
+func (m *Model) applyPlaybackPoll(msg playbackPollResultMsg) tea.Cmd {
+	var cmds []tea.Cmd
+	if msg.sequence > m.appliedModePollSequence {
+		m.appliedModePollSequence = msg.sequence
+		if msg.err == nil {
+			cmds = append(cmds, m.observeRemoteModes(msg.state, msg.shuffleEpoch, msg.repeatEpoch))
+		}
+	}
+	if msg.epoch != m.playbackEpoch || msg.version != m.playbackVersion.Load() || msg.sequence <= m.appliedPollSequence {
+		return tea.Batch(cmds...)
+	}
+	m.appliedPollSequence = msg.sequence
+	if msg.err != nil {
+		cmds = append(cmds, m.showError(msg.err, 3*time.Second), m.failedPlaybackPoll())
+	} else {
+		cmds = append(cmds, m.observePlaybackPoll(msg.state, msg.volumeGeneration, msg.volumeEpoch))
+	}
+	return tea.Batch(cmds...)
+}
+
 func (m *Model) togglePlayback() tea.Cmd {
 	m.desiredPlaying = !m.desiredPlaying
 	m.isPlaying = m.desiredPlaying
@@ -44,8 +64,12 @@ func (m *Model) togglePlayback() tea.Cmd {
 }
 
 func (m *Model) selectTrack(idx int) tea.Cmd {
+	if m.playlist == nil || len(m.playlist.Tracks) == 0 {
+		return nil
+	}
 	m.queuedTrack = idx
 	m.playingIdx, m.progressMs = idx, 0
+	m.currentTrack = &m.playlist.Tracks[idx]
 	m.desiredPlaying, m.isPlaying = true, true
 	m.playbackVersion.Add(1)
 	if m.playbackPending || m.playbackReconcile {
@@ -64,6 +88,7 @@ func (m *Model) startPlaybackCommand() tea.Cmd {
 	m.isPlaying = m.desiredPlaying
 	if m.requestedTrack >= 0 {
 		m.playingIdx, m.progressMs = m.requestedTrack, 0
+		m.currentTrack = &m.playlist.Tracks[m.requestedTrack]
 		return m.playTrackIndexCmd(m.requestedTrack)
 	}
 	return m.togglePlayPauseCmd(m.desiredPlaying)
@@ -76,6 +101,12 @@ func (m *Model) finishPlaybackCommand(version uint64, playing bool, err error, a
 	m.playbackPending = false
 	m.playbackEpoch++ // Polls started while the request was running cannot confirm its result.
 	if err != nil {
+		if m.requestedTrack >= 0 {
+			m.confirmedTrackIdx = -1
+			if m.queuedTrack < 0 {
+				m.playingIdx, m.currentTrack = -1, nil
+			}
+		}
 		m.failedVersion = version
 		m.playbackReconcile = true
 		m.playbackObservationCount = 0
@@ -90,6 +121,7 @@ func (m *Model) finishPlaybackCommand(version uint64, playing bool, err error, a
 	m.confirmedPlaying = playing
 	if m.requestedTrack >= 0 {
 		m.confirmationTrack = m.requestedTrack
+		m.confirmedTrackIdx = m.requestedTrack
 	}
 	m.clearInitialPlaybackError()
 	if m.queuedTrack >= 0 || m.desiredPlaying != playing {
@@ -105,8 +137,8 @@ func (m *Model) finishPlaybackCommand(version uint64, playing bool, err error, a
 }
 
 func (m *Model) observePlayback(state *spotify.PlaybackState) tea.Cmd {
-	m.observeRemoteModes(state, m.shuffleEpoch, m.repeatEpoch)
-	return m.observePlaybackPoll(state, m.volumeGeneration.Load(), m.volumeEpoch)
+	modeCmd := m.observeRemoteModes(state, m.shuffleEpoch, m.repeatEpoch)
+	return tea.Batch(modeCmd, m.observePlaybackPoll(state, m.volumeGeneration.Load(), m.volumeEpoch))
 }
 
 func (m *Model) observePlaybackPoll(state *spotify.PlaybackState, volumeGeneration, volumeEpoch uint64) tea.Cmd {
@@ -151,15 +183,36 @@ func (m *Model) observePlaybackPoll(state *spotify.PlaybackState, volumeGenerati
 		return next
 	}
 	m.progressMs = state.ProgressMs
-	if state.Item != nil {
-		if idx, ok := m.trackIndex[state.Item.ID]; ok {
-			m.playingIdx = idx
-		}
-	}
+	m.observeTrack(state.Item)
 	if state.IsPlaying {
 		m.clearInitialPlaybackError()
 	}
 	return next
+}
+
+func (m *Model) observeTrack(track *spotify.Track) {
+	m.currentTrack = track
+	if track == nil {
+		m.playingIdx, m.confirmedTrackIdx = -1, -1
+		return
+	}
+	if m.confirmedTrackIdx >= 0 && m.playlist.Tracks[m.confirmedTrackIdx].ID == track.ID {
+		m.playingIdx = m.confirmedTrackIdx
+		return
+	}
+	m.playingIdx, m.confirmedTrackIdx = -1, -1
+	if indices := m.trackIndex[track.ID]; len(indices) == 1 {
+		m.playingIdx, m.confirmedTrackIdx = indices[0], indices[0]
+	}
+}
+
+// SetInitialPlaybackTrack records the exact row acknowledged during startup.
+func (m *Model) SetInitialPlaybackTrack(idx int) {
+	m.currentTrack = &m.playlist.Tracks[idx]
+	m.playingIdx, m.confirmedTrackIdx = idx, idx
+	m.confirmationTrack = idx
+	m.playbackAwaitingConfirmation = true
+	m.playbackObservationCount = 0
 }
 
 // A failed command cannot hold the controls hostage when Spotify observations

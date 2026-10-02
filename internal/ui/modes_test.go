@@ -43,6 +43,7 @@ func TestShuffleSerializesAndCoalescesLatestIntent(t *testing.T) {
 		},
 	}
 	model := NewModel(client, nil, nil, nil, "device")
+	model.observeRemoteModes(&spotify.PlaybackState{RepeatState: "off"}, model.shuffleEpoch, model.repeatEpoch)
 
 	first := model.toggleShuffle()
 	if first == nil || !model.shuffle || !model.shufflePending {
@@ -156,6 +157,7 @@ func TestRepeatSerializesAndCoalescesLatestIntent(t *testing.T) {
 
 func TestModePollsCannotOverwriteNewerIntent(t *testing.T) {
 	model := NewModel(&mockSpotifyController{}, nil, nil, nil, "device")
+	model.observeRemoteModes(&spotify.PlaybackState{RepeatState: "off"}, model.shuffleEpoch, model.repeatEpoch)
 
 	shuffleCmd := model.toggleShuffle()
 	shufflePollEpoch := model.shuffleEpoch

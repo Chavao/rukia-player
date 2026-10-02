@@ -129,7 +129,7 @@ func RenderTrackTable(tracks []spotify.Track, cursor int, playingIdx int, width 
 }
 
 // RenderBottomBar renders the player progress bar and metadata matching Image 2.
-func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, isPlaying bool, shuffle bool, repeatMode string, width int, errStr ...string) string {
+func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, isPlaying bool, shuffle bool, shuffleKnown bool, repeatMode string, width int, errStr ...string) string {
 	if width <= 0 {
 		return ""
 	}
@@ -159,7 +159,9 @@ func RenderBottomBar(currentTrack *spotify.Track, progressMs int, volume int, is
 		repIcon = "R"
 	}
 	shufIcon := " "
-	if shuffle {
+	if !shuffleKnown {
+		shufIcon = "?"
+	} else if shuffle {
 		shufIcon = "S"
 	}
 	playIcon := "⏸"

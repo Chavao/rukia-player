@@ -389,6 +389,7 @@ func TestRemoteActionPollingPolicy(t *testing.T) {
 		return &spotify.PlaybackState{IsPlaying: true}, nil
 	}}
 	model := NewModel(controller, nil, nil, nil, "device")
+	model.observeRemoteModes(&spotify.PlaybackState{RepeatState: "off"}, model.shuffleEpoch, model.repeatEpoch)
 
 	if _, cmd := model.Update(actionResultMsg{version: model.requestedVersion, action: "change volume"}); cmd != nil {
 		t.Fatal("change volume unexpectedly scheduled immediate poll on success")
@@ -442,6 +443,7 @@ func TestRemoteActionPollingPolicy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := NewModel(controller, nil, nil, nil, "device")
+			m.observeRemoteModes(&spotify.PlaybackState{RepeatState: "off"}, m.shuffleEpoch, m.repeatEpoch)
 			request := tc.start(m)
 			result := request().(actionResultMsg)
 			result.err = assertErr("failed")
@@ -701,8 +703,8 @@ func TestModelTrackIndexLookup(t *testing.T) {
 	if len(model.trackIndex) != 3 {
 		t.Fatalf("expected trackIndex length 3, got %d", len(model.trackIndex))
 	}
-	if model.trackIndex["track-b"] != 1 {
-		t.Errorf("expected track-b at index 1, got %d", model.trackIndex["track-b"])
+	if indices := model.trackIndex["track-b"]; len(indices) != 1 || indices[0] != 1 {
+		t.Errorf("expected track-b at index 1, got %v", indices)
 	}
 
 	// Dispatch playbackStateMsg for track-c

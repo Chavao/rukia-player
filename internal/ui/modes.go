@@ -11,6 +11,10 @@ import (
 const modeConfirmationObservations = 3
 
 func (m *Model) toggleShuffle() tea.Cmd {
+	if !m.shuffleKnown {
+		m.queuedShuffleToggle = !m.queuedShuffleToggle
+		return nil
+	}
 	m.shuffle = !m.shuffle
 	m.shuffleVersion++
 	m.shuffleEpoch++
@@ -108,15 +112,24 @@ func (m *Model) finishRepeatCommand(msg actionResultMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) observeRemoteModes(state *spotify.PlaybackState, shuffleEpoch, repeatEpoch uint64) {
-	remoteShuffle := false
+func (m *Model) observeRemoteModes(state *spotify.PlaybackState, shuffleEpoch, repeatEpoch uint64) tea.Cmd {
+	var shuffleCmd tea.Cmd
 	remoteRepeat := "off"
 	if state != nil {
-		remoteShuffle = state.ShuffleState
 		remoteRepeat = state.RepeatState
 	}
 
-	if shuffleEpoch == m.shuffleEpoch && !m.shufflePending {
+	if state != nil && shuffleEpoch == m.shuffleEpoch && !m.shufflePending {
+		remoteShuffle := state.ShuffleState
+		if !m.shuffleKnown {
+			m.shuffleKnown = true
+			m.shuffle = remoteShuffle
+			if m.queuedShuffleToggle {
+				m.queuedShuffleToggle = false
+				shuffleCmd = m.toggleShuffle()
+			}
+			goto repeat
+		}
 		if m.shuffleAwaitingConfirmation {
 			if remoteShuffle != m.shuffle {
 				m.shuffleObservationCount++
@@ -135,11 +148,12 @@ repeat:
 			if remoteRepeat != m.repeatMode {
 				m.repeatObservationCount++
 				if m.repeatObservationCount < modeConfirmationObservations {
-					return
+					return shuffleCmd
 				}
 			}
 			m.repeatAwaitingConfirmation = false
 		}
 		m.repeatMode = remoteRepeat
 	}
+	return shuffleCmd
 }

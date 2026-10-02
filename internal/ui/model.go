@@ -73,10 +73,12 @@ type Model struct {
 	playlist       *spotify.Playlist
 	deviceID       string
 	volumeSettings VolumeSettings
-	trackIndex     map[string]int
+	trackIndex     map[string][]int
+	currentTrack   *spotify.Track
 
 	cursor                       int
 	playingIdx                   int
+	confirmedTrackIdx            int
 	isPlaying                    bool
 	confirmedPlaying             bool
 	desiredPlaying               bool
@@ -87,6 +89,7 @@ type Model struct {
 	playbackEpoch                uint64
 	pollSequence                 uint64
 	appliedPollSequence          uint64
+	appliedModePollSequence      uint64
 	queuedTrack                  int
 	requestedTrack               int
 	confirmationTrack            int
@@ -109,6 +112,8 @@ type Model struct {
 	exitPending                  bool
 	repeatMode                   string
 	shuffle                      bool
+	shuffleKnown                 bool
+	queuedShuffleToggle          bool
 	shufflePending               bool
 	shuffleVersion               uint64
 	requestedShuffleVersion      uint64
@@ -151,10 +156,10 @@ func NewModel(
 		vol = volumeSettings.CurrentVolume()
 	}
 
-	idxMap := make(map[string]int)
+	idxMap := make(map[string][]int)
 	if playlist != nil {
 		for i, t := range playlist.Tracks {
-			idxMap[t.ID] = i
+			idxMap[t.ID] = append(idxMap[t.ID], i)
 		}
 	}
 
@@ -171,7 +176,8 @@ func NewModel(
 		volumeSettings:    volumeSettings,
 		trackIndex:        idxMap,
 		cursor:            0,
-		playingIdx:        0,
+		playingIdx:        -1,
+		confirmedTrackIdx: -1,
 		isPlaying:         true,
 		confirmedPlaying:  true,
 		desiredPlaying:    true,
@@ -256,8 +262,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		if m.isPlaying {
 			m.progressMs += 1000
-			if m.playlist != nil && m.playingIdx >= 0 && m.playingIdx < len(m.playlist.Tracks) {
-				currDur := m.playlist.Tracks[m.playingIdx].DurationMs
+			if m.currentTrack != nil {
+				currDur := m.currentTrack.DurationMs
 				if m.progressMs > currDur {
 					m.progressMs = currDur
 				}
@@ -269,16 +275,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, pollCmd(defaultPollInterval), m.pollPlaybackCmd())
 
 	case playbackPollResultMsg:
-		if msg.epoch != m.playbackEpoch || msg.version != m.playbackVersion.Load() || msg.sequence <= m.appliedPollSequence {
-			break
-		}
-		m.appliedPollSequence = msg.sequence
-		if msg.err != nil {
-			cmds = append(cmds, m.showError(msg.err, 3*time.Second), m.failedPlaybackPoll())
-		} else {
-			m.observeRemoteModes(msg.state, msg.shuffleEpoch, msg.repeatEpoch)
-			cmds = append(cmds, m.observePlaybackPoll(msg.state, msg.volumeGeneration, msg.volumeEpoch))
-		}
+		cmds = append(cmds, m.applyPlaybackPoll(msg))
 
 	case playbackStateMsg:
 		cmds = append(cmds, m.observePlayback((*spotify.PlaybackState)(msg)))
