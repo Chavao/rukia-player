@@ -38,6 +38,11 @@ func TestModelUpdateNavigationAndModal(t *testing.T) {
 		t.Errorf("expected cursor 1 after Down, got %d", model.cursor)
 	}
 
+	model.Update(downMsg)
+	if model.cursor != 1 {
+		t.Errorf("expected cursor to remain at last row, got %d", model.cursor)
+	}
+
 	// Up arrow key
 	upMsg := tea.KeyMsg{Type: tea.KeyUp}
 	m, _ = model.Update(upMsg)
@@ -45,6 +50,11 @@ func TestModelUpdateNavigationAndModal(t *testing.T) {
 
 	if model.cursor != 0 {
 		t.Errorf("expected cursor 0 after Up, got %d", model.cursor)
+	}
+
+	model.Update(upMsg)
+	if model.cursor != 0 {
+		t.Errorf("expected cursor to remain at first row, got %d", model.cursor)
 	}
 
 	// Exit key ('q')
@@ -847,64 +857,5 @@ func TestModelExtremeTerminalDimensions(t *testing.T) {
 		if dim.width == 0 && output != "" {
 			// graceful degradation check
 		}
-	}
-}
-
-func TestModelNavigationSkipsUnplayableTracks(t *testing.T) {
-	unplayable := false
-	tracks := []spotify.Track{
-		{ID: "t0", Name: "Disabled 0", DurationMs: 100000, IsPlayable: &unplayable},
-		{ID: "t1", Name: "Playable 1", DurationMs: 120000},
-		{ID: "t2", Name: "Disabled 2", DurationMs: 150000, IsPlayable: &unplayable},
-		{ID: "t3", Name: "Playable 3", DurationMs: 180000},
-	}
-	playlist := &spotify.Playlist{
-		Name:   "Playlist with disabled tracks",
-		Tracks: tracks,
-	}
-
-	model := NewModel(nil, nil, nil, playlist, "dev-1")
-
-	// Cursor should start on first playable track (index 1)
-	if model.cursor != 1 {
-		t.Fatalf("expected initial cursor at first playable track 1, got %d", model.cursor)
-	}
-
-	// Press Down: should skip index 2 and jump to index 3
-	downMsg := tea.KeyMsg{Type: tea.KeyDown}
-	m, _ := model.Update(downMsg)
-	model = m.(*Model)
-	if model.cursor != 3 {
-		t.Errorf("expected cursor 3 after Down, got %d", model.cursor)
-	}
-
-	// Press Down again: should remain at index 3
-	m, _ = model.Update(downMsg)
-	model = m.(*Model)
-	if model.cursor != 3 {
-		t.Errorf("expected cursor to remain at 3, got %d", model.cursor)
-	}
-
-	// Press Up: should skip index 2 and jump to index 1
-	upMsg := tea.KeyMsg{Type: tea.KeyUp}
-	m, _ = model.Update(upMsg)
-	model = m.(*Model)
-	if model.cursor != 1 {
-		t.Errorf("expected cursor 1 after Up, got %d", model.cursor)
-	}
-
-	// Press Up again: should remain at index 1 (skipping index 0)
-	m, _ = model.Update(upMsg)
-	model = m.(*Model)
-	if model.cursor != 1 {
-		t.Errorf("expected cursor to remain at 1, got %d", model.cursor)
-	}
-
-	// Forcing cursor to unplayable index and pressing Enter should not start playback
-	model.cursor = 2
-	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
-	_, cmd := model.Update(enterMsg)
-	if cmd != nil {
-		t.Errorf("expected no command when Enter is pressed on an unplayable track, got %v", cmd)
 	}
 }

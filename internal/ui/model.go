@@ -156,17 +156,10 @@ func NewModel(
 		vol = volumeSettings.CurrentVolume()
 	}
 
-	firstPlayable := 0
 	idxMap := make(map[string][]int)
 	if playlist != nil {
 		for i, t := range playlist.Tracks {
 			idxMap[t.ID] = append(idxMap[t.ID], i)
-		}
-		for i, t := range playlist.Tracks {
-			if t.CanPlay() {
-				firstPlayable = i
-				break
-			}
 		}
 	}
 
@@ -182,7 +175,7 @@ func NewModel(
 		deviceID:          deviceID,
 		volumeSettings:    volumeSettings,
 		trackIndex:        idxMap,
-		cursor:            firstPlayable,
+		cursor:            0,
 		playingIdx:        -1,
 		confirmedTrackIdx: -1,
 		isPlaying:         true,
@@ -380,9 +373,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.moveCursorDown()
 
 		case key.Matches(msg, m.keys.Enter):
-			if m.playlist != nil && m.cursor >= 0 && m.cursor < len(m.playlist.Tracks) && !m.playlist.Tracks[m.cursor].CanPlay() {
-				break
-			}
 			if m.cursor == m.playingIdx {
 				// Toggle Play/Pause
 				cmds = append(cmds, m.togglePlayback())
@@ -448,11 +438,8 @@ func (m *Model) moveCursorUp() {
 	if m.playlist == nil || len(m.playlist.Tracks) == 0 {
 		return
 	}
-	for i := m.cursor - 1; i >= 0; i-- {
-		if m.playlist.Tracks[i].CanPlay() {
-			m.cursor = i
-			return
-		}
+	if m.cursor > 0 {
+		m.cursor--
 	}
 }
 
@@ -460,10 +447,7 @@ func (m *Model) moveCursorDown() {
 	if m.playlist == nil || len(m.playlist.Tracks) == 0 {
 		return
 	}
-	for i := m.cursor + 1; i < len(m.playlist.Tracks); i++ {
-		if m.playlist.Tracks[i].CanPlay() {
-			m.cursor = i
-			return
-		}
+	if m.cursor < len(m.playlist.Tracks)-1 {
+		m.cursor++
 	}
 }

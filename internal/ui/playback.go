@@ -64,7 +64,7 @@ func (m *Model) togglePlayback() tea.Cmd {
 }
 
 func (m *Model) selectTrack(idx int) tea.Cmd {
-	if m.playlist == nil || len(m.playlist.Tracks) == 0 || idx < 0 || idx >= len(m.playlist.Tracks) || !m.playlist.Tracks[idx].CanPlay() {
+	if m.playlist == nil || len(m.playlist.Tracks) == 0 || idx < 0 || idx >= len(m.playlist.Tracks) {
 		return nil
 	}
 	m.queuedTrack = idx
