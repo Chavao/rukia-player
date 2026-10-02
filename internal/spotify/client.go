@@ -54,11 +54,6 @@ type Track struct {
 	PlaylistPosition int    `json:"-"`
 }
 
-// CanPlay returns true if the track is playable (defaults to true if unrestricted/unspecified).
-func (t Track) CanPlay() bool {
-	return t.IsPlayable == nil || *t.IsPlayable
-}
-
 // Playlist represents a Spotify playlist with all its loaded tracks.
 type Playlist struct {
 	ID            string `json:"id"`
@@ -233,7 +228,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 			if trackObj == nil {
 				trackObj = item.Track
 			}
-			if trackObj == nil || trackObj.ID == "" {
+			if trackObj == nil || trackObj.ID == "" || (trackObj.IsPlayable != nil && !*trackObj.IsPlayable) {
 				continue
 			}
 

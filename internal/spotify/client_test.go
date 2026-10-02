@@ -150,75 +150,100 @@ func TestGetPlaylistItemsEndpoint(t *testing.T) {
 	}
 }
 
-func TestGetPlaylistUnplayableTrack(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/playlists/restricted" {
-			w.Write([]byte(`{
-				"id": "restricted",
-				"name": "Restricted Playlist",
-				"items": {"total": 2}
-			}`))
-			return
-		}
-		if r.URL.Path == "/playlists/restricted/items" {
-			w.Write([]byte(`{
-				"items": [
-					{
-						"item": {
-							"id": "trk-unplayable",
-							"uri": "spotify:track:trk-unplayable",
-							"name": "Disabled Song",
-							"duration_ms": 73070,
-							"is_playable": false,
-							"artists": [{"name": "Artist 1"}],
-							"album": {"name": "Album 1"}
-						}
-					},
-					{
-						"item": {
-							"id": "trk-playable",
-							"uri": "spotify:track:trk-playable",
-							"name": "Playable Song",
-							"duration_ms": 153083,
-							"is_playable": true,
-							"artists": [{"name": "Artist 2"}],
-							"album": {"name": "Album 2"}
-						}
+func TestGetPlaylistFiltersUnplayableTracks(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		pages         []string
+		wantIDs       []string
+		wantPositions []int
+		wantDuration  time.Duration
+	}{
+		{
+			name: "mixed playability",
+			pages: []string{`{"items":[
+				{"item":{"id":"hidden-first","is_playable":false,"duration_ms":9000}},
+				{"item":{"id":"repeated","is_playable":true,"duration_ms":1000}},
+				{"item":{"id":"hidden-middle","is_playable":false,"duration_ms":9000}},
+				{"item":{"id":"missing","duration_ms":2000}},
+				{"item":{"id":"null","is_playable":null,"duration_ms":3000}},
+				{"item":{"id":"repeated","is_playable":true,"duration_ms":1000}},
+				{"item":{"id":"hidden-last","is_playable":false,"duration_ms":9000}}
+			],"next":null}`},
+			wantIDs:       []string{"repeated", "missing", "null", "repeated"},
+			wantPositions: []int{1, 3, 4, 5},
+			wantDuration:  7 * time.Second,
+		},
+		{
+			name: "fully filtered page followed by playable page",
+			pages: []string{
+				`{"items":[{"item":{"id":"hidden","is_playable":false,"duration_ms":9000}}],"next":"next-page"}`,
+				`{"items":[{"item":{"id":"visible","is_playable":true,"duration_ms":1000}}],"next":null}`,
+			},
+			wantIDs:       []string{"visible"},
+			wantPositions: []int{1},
+			wantDuration:  time.Second,
+		},
+		{name: "all unplayable", pages: []string{`{"items":[{"item":{"id":"hidden","is_playable":false,"duration_ms":9000}}],"next":null}`}},
+		{name: "empty", pages: []string{`{"items":[],"next":null}`}},
+	} {
+		for _, legacy := range []bool{false, true} {
+			endpoint := "items"
+			if legacy {
+				endpoint = "tracks"
+			}
+			t.Run(tc.name+"/"+endpoint, func(t *testing.T) {
+				pageIndex := 0
+				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					if r.URL.Path == "/playlists/test" {
+						w.Write([]byte(`{"id":"test","items":{"total":7}}`))
+						return
 					}
-				],
-				"next": null
-			}`))
-			return
+					if legacy && r.URL.Path == "/playlists/test/items" {
+						http.NotFound(w, r)
+						return
+					}
+					if r.URL.Path != "/playlists/test/"+endpoint || pageIndex >= len(tc.pages) {
+						t.Errorf("unexpected request: %s", r.URL)
+						http.NotFound(w, r)
+						return
+					}
+					wantOffset := "0"
+					if pageIndex > 0 {
+						wantOffset = "1"
+					}
+					if got := r.URL.Query().Get("offset"); got != wantOffset {
+						t.Errorf("offset=%s, want %s", got, wantOffset)
+					}
+					page := tc.pages[pageIndex]
+					pageIndex++
+					if legacy {
+						page = strings.ReplaceAll(page, `"item":`, `"track":`)
+					}
+					w.Write([]byte(page))
+				}))
+				defer ts.Close()
+				client := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+				playlist, err := client.GetPlaylist(context.Background(), "test")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(playlist.Tracks) != len(tc.wantIDs) || playlist.TotalTracks != len(tc.wantIDs) {
+					t.Fatalf("tracks=%d, total=%d, want %d", len(playlist.Tracks), playlist.TotalTracks, len(tc.wantIDs))
+				}
+				if playlist.TotalDuration != tc.wantDuration {
+					t.Errorf("duration=%v, want %v", playlist.TotalDuration, tc.wantDuration)
+				}
+				for i, track := range playlist.Tracks {
+					if track.ID != tc.wantIDs[i] || track.PlaylistPosition != tc.wantPositions[i] {
+						t.Errorf("track %d: id=%s position=%d, want id=%s position=%d", i, track.ID, track.PlaylistPosition, tc.wantIDs[i], tc.wantPositions[i])
+					}
+				}
+				if pageIndex != len(tc.pages) {
+					t.Errorf("loaded %d pages, want %d", pageIndex, len(tc.pages))
+				}
+			})
 		}
-		http.NotFound(w, r)
-	}))
-	defer ts.Close()
-
-	c := &Client{
-		httpClient: ts.Client(),
-		apiBase:    ts.URL,
-	}
-
-	pl, err := c.GetPlaylist(context.Background(), "restricted")
-	if err != nil {
-		t.Fatalf("GetPlaylist failed: %v", err)
-	}
-
-	if len(pl.Tracks) != 2 {
-		t.Fatalf("expected 2 tracks, got %d", len(pl.Tracks))
-	}
-	if pl.Tracks[0].CanPlay() {
-		t.Errorf("expected track 0 to be unplayable")
-	}
-	if pl.Tracks[0].IsPlayable == nil || *pl.Tracks[0].IsPlayable {
-		t.Errorf("expected track 0 IsPlayable to be &false")
-	}
-	if !pl.Tracks[1].CanPlay() {
-		t.Errorf("expected track 1 to be playable")
-	}
-	if pl.Tracks[1].IsPlayable == nil || !*pl.Tracks[1].IsPlayable {
-		t.Errorf("expected track 1 IsPlayable to be &true")
 	}
 }
 
