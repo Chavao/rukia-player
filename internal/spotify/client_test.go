@@ -150,6 +150,78 @@ func TestGetPlaylistItemsEndpoint(t *testing.T) {
 	}
 }
 
+func TestGetPlaylistUnplayableTrack(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/playlists/restricted" {
+			w.Write([]byte(`{
+				"id": "restricted",
+				"name": "Restricted Playlist",
+				"items": {"total": 2}
+			}`))
+			return
+		}
+		if r.URL.Path == "/playlists/restricted/items" {
+			w.Write([]byte(`{
+				"items": [
+					{
+						"item": {
+							"id": "trk-unplayable",
+							"uri": "spotify:track:trk-unplayable",
+							"name": "Disabled Song",
+							"duration_ms": 73070,
+							"is_playable": false,
+							"artists": [{"name": "Artist 1"}],
+							"album": {"name": "Album 1"}
+						}
+					},
+					{
+						"item": {
+							"id": "trk-playable",
+							"uri": "spotify:track:trk-playable",
+							"name": "Playable Song",
+							"duration_ms": 153083,
+							"is_playable": true,
+							"artists": [{"name": "Artist 2"}],
+							"album": {"name": "Album 2"}
+						}
+					}
+				],
+				"next": null
+			}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	c := &Client{
+		httpClient: ts.Client(),
+		apiBase:    ts.URL,
+	}
+
+	pl, err := c.GetPlaylist(context.Background(), "restricted")
+	if err != nil {
+		t.Fatalf("GetPlaylist failed: %v", err)
+	}
+
+	if len(pl.Tracks) != 2 {
+		t.Fatalf("expected 2 tracks, got %d", len(pl.Tracks))
+	}
+	if pl.Tracks[0].CanPlay() {
+		t.Errorf("expected track 0 to be unplayable")
+	}
+	if pl.Tracks[0].IsPlayable == nil || *pl.Tracks[0].IsPlayable {
+		t.Errorf("expected track 0 IsPlayable to be &false")
+	}
+	if !pl.Tracks[1].CanPlay() {
+		t.Errorf("expected track 1 to be playable")
+	}
+	if pl.Tracks[1].IsPlayable == nil || !*pl.Tracks[1].IsPlayable {
+		t.Errorf("expected track 1 IsPlayable to be &true")
+	}
+}
+
 func TestGetPlaylistDoesNotFallbackOnForbiddenItems(t *testing.T) {
 	legacyCalls := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

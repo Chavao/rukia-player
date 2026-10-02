@@ -50,7 +50,13 @@ type Track struct {
 	Artist           string `json:"artist"`
 	Album            string `json:"album"`
 	DurationMs       int    `json:"duration_ms"`
+	IsPlayable       *bool  `json:"is_playable,omitempty"`
 	PlaylistPosition int    `json:"-"`
+}
+
+// CanPlay returns true if the track is playable (defaults to true if unrestricted/unspecified).
+func (t Track) CanPlay() bool {
+	return t.IsPlayable == nil || *t.IsPlayable
 }
 
 // Playlist represents a Spotify playlist with all its loaded tracks.
@@ -162,6 +168,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 		URI        string `json:"uri"`
 		Name       string `json:"name"`
 		DurationMs int    `json:"duration_ms"`
+		IsPlayable *bool  `json:"is_playable"`
 		Artists    []struct {
 			Name string `json:"name"`
 		} `json:"artists"`
@@ -242,6 +249,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 				Artist:           strings.Join(artistNames, ", "),
 				Album:            trackObj.Album.Name,
 				DurationMs:       trackObj.DurationMs,
+				IsPlayable:       trackObj.IsPlayable,
 				PlaylistPosition: offset + itemIndex,
 			}
 			totalDurationMs += t.DurationMs
@@ -483,6 +491,7 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 			URI        string `json:"uri"`
 			Name       string `json:"name"`
 			DurationMs int    `json:"duration_ms"`
+			IsPlayable *bool  `json:"is_playable"`
 			Artists    []struct {
 				Name string `json:"name"`
 			} `json:"artists"`
@@ -516,6 +525,7 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 			Artist:     strings.Join(artistNames, ", "),
 			Album:      raw.Item.Album.Name,
 			DurationMs: raw.Item.DurationMs,
+			IsPlayable: raw.Item.IsPlayable,
 		}
 	}
 
