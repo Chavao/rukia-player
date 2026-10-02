@@ -32,13 +32,13 @@ var (
 
 	// Track Table Styles
 	TrackArtistNormal = lipgloss.NewStyle().
-				Foreground(ColorTextDim)
+				Foreground(ColorText)
 
 	TrackTitleNormal = lipgloss.NewStyle().
 				Foreground(ColorText)
 
 	TrackDurationNormal = lipgloss.NewStyle().
-				Foreground(ColorTextDim).
+				Foreground(ColorText).
 				Align(lipgloss.Right)
 
 	TrackUnplayableNormal = lipgloss.NewStyle().
