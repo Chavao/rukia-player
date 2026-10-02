@@ -58,11 +58,6 @@ func (s *FileStateStore) Load() (*librespot.AppState, error) {
 		if filepath.Clean(rukiaCache) != filepath.Clean(filepath.Join(s.cacheDir, "credentials.json")) {
 			candidatePaths = append(candidatePaths, rukiaCache)
 		}
-		// NOTE: External client cache migration fallback.
-		// Rukia checks ncspot's cache (~/.cache/ncspot/librespot/credentials.json)
-		// as a fallback to allow users transitioning from ncspot to reuse credentials.
-		ncspotCache := filepath.Join(home, ".cache", "ncspot", "librespot", "credentials.json")
-		candidatePaths = append(candidatePaths, ncspotCache)
 	}
 
 	for _, p := range candidatePaths {
