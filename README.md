@@ -1,5 +1,8 @@
 # rukia-player
 
+<img width="1916" height="821" alt="image" src="https://github.com/user-attachments/assets/42a0f5b2-d4c8-43d7-a365-56de6ab648e0" />
+
+
 A lightweight, terminal-based Spotify music player written in Golang using [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss), and [go-librespot](https://github.com/devgianlu/go-librespot).
 
 The application compiles to the command-line binary `rukia-player` and starts playing a specified Spotify playlist immediately upon invocation.
