@@ -156,10 +156,17 @@ func NewModel(
 		vol = volumeSettings.CurrentVolume()
 	}
 
+	firstPlayable := 0
 	idxMap := make(map[string][]int)
 	if playlist != nil {
 		for i, t := range playlist.Tracks {
 			idxMap[t.ID] = append(idxMap[t.ID], i)
+		}
+		for i, t := range playlist.Tracks {
+			if t.CanPlay() {
+				firstPlayable = i
+				break
+			}
 		}
 	}
 
@@ -175,7 +182,7 @@ func NewModel(
 		deviceID:          deviceID,
 		volumeSettings:    volumeSettings,
 		trackIndex:        idxMap,
-		cursor:            0,
+		cursor:            firstPlayable,
 		playingIdx:        -1,
 		confirmedTrackIdx: -1,
 		isPlaying:         true,
@@ -367,16 +374,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showExitModal = true
 
 		case key.Matches(msg, m.keys.Up):
-			if m.cursor > 0 {
-				m.cursor--
-			}
+			m.moveCursorUp()
 
 		case key.Matches(msg, m.keys.Down):
-			if m.playlist != nil && m.cursor < len(m.playlist.Tracks)-1 {
-				m.cursor++
-			}
+			m.moveCursorDown()
 
 		case key.Matches(msg, m.keys.Enter):
+			if m.playlist != nil && m.cursor >= 0 && m.cursor < len(m.playlist.Tracks) && !m.playlist.Tracks[m.cursor].CanPlay() {
+				break
+			}
 			if m.cursor == m.playingIdx {
 				// Toggle Play/Pause
 				cmds = append(cmds, m.togglePlayback())
@@ -436,4 +442,28 @@ func (m *Model) SetInitialError(err error) {
 	m.err = err
 	m.errorGeneration++
 	m.initialErrorGeneration = m.errorGeneration
+}
+
+func (m *Model) moveCursorUp() {
+	if m.playlist == nil || len(m.playlist.Tracks) == 0 {
+		return
+	}
+	for i := m.cursor - 1; i >= 0; i-- {
+		if m.playlist.Tracks[i].CanPlay() {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+func (m *Model) moveCursorDown() {
+	if m.playlist == nil || len(m.playlist.Tracks) == 0 {
+		return
+	}
+	for i := m.cursor + 1; i < len(m.playlist.Tracks); i++ {
+		if m.playlist.Tracks[i].CanPlay() {
+			m.cursor = i
+			return
+		}
+	}
 }
