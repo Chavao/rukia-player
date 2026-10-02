@@ -58,7 +58,7 @@ func RenderHeader(userName string, playlist *spotify.Playlist, width int) string
 // RenderTrackTable renders the scrollable list of tracks with three columns.
 func RenderTrackTable(tracks []spotify.Track, cursor int, playingIdx int, width int, height int) string {
 	if len(tracks) == 0 {
-		return lipgloss.NewStyle().Foreground(ColorMuted).Render("No tracks in playlist.")
+		return lipgloss.NewStyle().Foreground(ColorMuted).Render("No playable tracks in playlist.")
 	}
 
 	if height < 1 {
@@ -115,11 +115,6 @@ func RenderTrackTable(tracks []spotify.Track, cursor int, playingIdx int, width 
 		if isSelected {
 			fullRow := fmt.Sprintf("%s  %s  %s", col1Padded, col2Padded, durPadded)
 			rowStr = TrackRowSelected.Render(fullRow)
-		} else if !t.CanPlay() {
-			styledCol1 := TrackUnplayableNormal.Render(col1Padded)
-			styledCol2 := TrackUnplayableNormal.Render(col2Padded)
-			styledCol3 := TrackUnplayableNormal.Render(durPadded)
-			rowStr = fmt.Sprintf("%s  %s  %s", styledCol1, styledCol2, styledCol3)
 		} else {
 			styledCol1 := TrackArtistNormal.Render(col1Padded)
 			styledCol2 := TrackTitleNormal.Render(col2Padded)
