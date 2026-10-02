@@ -2,6 +2,7 @@ package spotify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -174,6 +175,79 @@ func TestGetPlaylistDoesNotFallbackOnForbiddenItems(t *testing.T) {
 	}
 	if legacyCalls != 0 {
 		t.Fatalf("expected no legacy fallback, got %d requests", legacyCalls)
+	}
+}
+
+func TestGetPlaylistPreservesPositionsAcrossSkippedItemsAndPages(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		name := "items"
+		if legacy {
+			name = "tracks"
+		}
+		t.Run(name, func(t *testing.T) {
+			var offsets []string
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/playlists/test" {
+					w.Write([]byte(`{"id":"test","items":{"total":8}}`))
+					return
+				}
+				if legacy && r.URL.Path == "/playlists/test/items" {
+					http.NotFound(w, r)
+					return
+				}
+				if r.URL.Path != "/playlists/test/"+name {
+					http.NotFound(w, r)
+					return
+				}
+				offset := r.URL.Query().Get("offset")
+				offsets = append(offsets, offset)
+				switch offset {
+				case "0":
+					page := `{"items":[{"item":null},{"item":{"id":"duplicate"}},{"item":{"id":""}},{"item":{"id":"second"}}],"next":"next-page"}`
+					if legacy {
+						page = strings.ReplaceAll(page, `"item":`, `"track":`)
+					}
+					w.Write([]byte(page))
+				case "4":
+					page := `{"items":[{}, {"item":{"id":"duplicate"}},{"item":null},{"item":{"id":"fourth"}}],"next":null}`
+					if legacy {
+						page = strings.ReplaceAll(page, `"item":`, `"track":`)
+					}
+					w.Write([]byte(page))
+				default:
+					t.Errorf("unexpected page offset %q", offset)
+					w.Write([]byte(`{"items":[],"next":null}`))
+				}
+			}))
+			defer ts.Close()
+			client := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+			playlist, err := client.GetPlaylist(context.Background(), "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(offsets, ",") != "0,4" {
+				t.Fatalf("page offsets=%v, want [0 4]", offsets)
+			}
+			if len(playlist.Tracks) != 4 {
+				t.Fatalf("loaded tracks=%d, want 4", len(playlist.Tracks))
+			}
+			for index, want := range []int{1, 3, 5, 7} {
+				if got := playlist.Tracks[index].PlaylistPosition; got != want {
+					t.Errorf("track %d position=%d, want %d", index, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestTrackPlaylistPositionIsNotSerialized(t *testing.T) {
+	data, err := json.Marshal(Track{ID: "track", PlaylistPosition: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "PlaylistPosition") || strings.Contains(string(data), "playlist_position") {
+		t.Fatalf("playlist position leaked into JSON: %s", data)
 	}
 }
 

@@ -44,12 +44,13 @@ type UserProfile struct {
 
 // Track represents an individual track in a playlist.
 type Track struct {
-	ID         string `json:"id"`
-	URI        string `json:"uri"`
-	Name       string `json:"name"`
-	Artist     string `json:"artist"`
-	Album      string `json:"album"`
-	DurationMs int    `json:"duration_ms"`
+	ID               string `json:"id"`
+	URI              string `json:"uri"`
+	Name             string `json:"name"`
+	Artist           string `json:"artist"`
+	Album            string `json:"album"`
+	DurationMs       int    `json:"duration_ms"`
+	PlaylistPosition int    `json:"-"`
 }
 
 // Playlist represents a Spotify playlist with all its loaded tracks.
@@ -220,7 +221,7 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 		}
 		tResp.Body.Close()
 
-		for _, item := range page.Items {
+		for itemIndex, item := range page.Items {
 			trackObj := item.Item
 			if trackObj == nil {
 				trackObj = item.Track
@@ -235,12 +236,13 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*Playlist,
 			}
 
 			t := Track{
-				ID:         trackObj.ID,
-				URI:        trackObj.URI,
-				Name:       trackObj.Name,
-				Artist:     strings.Join(artistNames, ", "),
-				Album:      trackObj.Album.Name,
-				DurationMs: trackObj.DurationMs,
+				ID:               trackObj.ID,
+				URI:              trackObj.URI,
+				Name:             trackObj.Name,
+				Artist:           strings.Join(artistNames, ", "),
+				Album:            trackObj.Album.Name,
+				DurationMs:       trackObj.DurationMs,
+				PlaylistPosition: offset + itemIndex,
 			}
 			totalDurationMs += t.DurationMs
 			playlist.Tracks = append(playlist.Tracks, t)
