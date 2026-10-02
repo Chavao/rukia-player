@@ -421,7 +421,7 @@ func PromptCredentialsIfMissing(cfg *Config) error {
 func cfgDirDisplay() string {
 	p, err := GetConfigPath()
 	if err != nil {
-		return "~/.config/rukia/config.json"
+		return "~/.config/rukia/player/config.json"
 	}
 	return p
 }

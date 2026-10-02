@@ -50,7 +50,7 @@ func GetConfigDir() (string, error) {
 		baseDir = filepath.Join(homeDir, ".config")
 	}
 
-	appDir := filepath.Join(baseDir, configDirName)
+	appDir := filepath.Join(baseDir, configDirName, "player")
 	if err := os.MkdirAll(appDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create config directory %s: %w", appDir, err)
 	}
@@ -78,7 +78,7 @@ type configDTO struct {
 	Volume       *int          `json:"volume"`
 }
 
-// LoadConfig loads configuration from ~/.config/rukia/config.json, applying environment overrides.
+// LoadConfig loads configuration from ~/.config/rukia/player/config.json, applying environment overrides.
 func LoadConfig() (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -87,7 +87,18 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(path)
+	readPath := path
+	data, err := os.ReadFile(readPath)
+	migrate := false
+	if errors.Is(err, os.ErrNotExist) {
+		// Import only rukia-player's previous config when the new location is absent.
+		readPath = filepath.Join(filepath.Dir(filepath.Dir(path)), configFileName)
+		data, err = os.ReadFile(readPath)
+		migrate = err == nil
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("failed to read legacy config file %s: %w", readPath, err)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Apply environment variables even if file does not exist yet.
@@ -99,7 +110,7 @@ func LoadConfig() (*Config, error) {
 
 	var dto configDTO
 	if err := json.Unmarshal(data, &dto); err != nil {
-		return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
+		return nil, fmt.Errorf("failed to parse config file %s: %w", readPath, err)
 	}
 
 	cfg.ClientID = dto.ClientID
@@ -129,6 +140,11 @@ func LoadConfig() (*Config, error) {
 		cfg.Volume = DefaultVolume
 	}
 
+	if migrate {
+		if err := cfg.Save(); err != nil {
+			return nil, fmt.Errorf("failed to migrate config to %s: %w", path, err)
+		}
+	}
 	applyEnvOverrides(cfg)
 	return cfg, nil
 }

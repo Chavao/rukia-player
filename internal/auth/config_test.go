@@ -75,7 +75,7 @@ func TestConfigLoadAndSave(t *testing.T) {
 		t.Fatalf("failed to save config: %v", err)
 	}
 
-	cfgPath := filepath.Join(tempDir, configDirName, configFileName)
+	cfgPath := filepath.Join(tempDir, configDirName, "player", configFileName)
 	fi, err := os.Stat(cfgPath)
 	if err != nil {
 		t.Fatalf("config file was not created: %v", err)
@@ -151,7 +151,7 @@ func TestConfigSaveEnforcesChmodExistingFile(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tempDir)
 
-	configDir := filepath.Join(tempDir, configDirName)
+	configDir := filepath.Join(tempDir, configDirName, "player")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		t.Fatalf("failed to create config dir: %v", err)
 	}
