@@ -178,7 +178,15 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	// 9. Start initial playback
 	playbackCtx, cancelPlayback := context.WithTimeout(startupCtx, 5*time.Second)
 	initialTrackOffset := 0
-	if len(playlist.Tracks) > 0 {
+	firstPlayableIdx := -1
+	for i, t := range playlist.Tracks {
+		if t.CanPlay() {
+			firstPlayableIdx = i
+			initialTrackOffset = t.PlaylistPosition
+			break
+		}
+	}
+	if firstPlayableIdx < 0 && len(playlist.Tracks) > 0 {
 		initialTrackOffset = playlist.Tracks[0].PlaylistPosition
 	}
 	playbackErr := startInitialPlayback(playbackCtx, spotifyClient, targetDeviceID, playlist.URI, initialTrackOffset)
@@ -193,8 +201,8 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	if playbackErr != nil {
 		model.SetPlaybackInitialState(false)
 		model.SetInitialError(playbackErr)
-	} else if len(playlist.Tracks) > 0 {
-		model.SetInitialPlaybackTrack(0)
+	} else if firstPlayableIdx >= 0 {
+		model.SetInitialPlaybackTrack(firstPlayableIdx)
 	}
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
 
