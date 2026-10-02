@@ -43,6 +43,7 @@ var (
 
 	TrackRowSelected = lipgloss.NewStyle().
 				Foreground(ColorCyan).
+				Background(ColorSelectionBg).
 				Bold(true)
 
 	TrackRowPlaying = lipgloss.NewStyle().
