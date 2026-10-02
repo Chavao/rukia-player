@@ -10,7 +10,8 @@ The application compiles to the command-line binary `rukia` and starts playing a
 - **Spotify Web API Integration**: OAuth 2.0 authorization code flow with PKCE, automatic token refresh, structured error parsing, and GET retries that respect Spotify's rate limits. Playback controls retry only selected transient failures with a bounded budget.
 - **OAuth Callback Server**: Loopback-restricted callback handler with explicit listener shutdown. Existing HTTPS configurations continue to use an ephemeral in-memory TLS certificate.
 - **Flexible Playlist Arguments**: Supports raw playlist IDs, IDs with query parameters, full Spotify URLs (`open.spotify.com`), and Spotify URIs.
-- **Cyan TUI Theme**: Designed to match the Spotify CLI theme with header stats, track listing (Artist - Album, Title, Duration), shuffle/repeat badges, and bottom progress bar with transient error notices.
+- **Cyan TUI Theme**: Header stats, track listing (Artist - Album, Title, Duration), bold cyan selection text on a dark blue background, shuffle/repeat badges, and bottom progress bar with transient error notices.
+- **Exact Playlist Selection**: Playing a selected row starts that occurrence, including songs repeated in the same playlist. The playing checkmark stays on the acknowledged occurrence while the cursor moves independently.
 - **Exit Confirmation Dialog**: Modal dialog (`Ctrl+q`, `q`, `Ctrl+c`) with `<No>` and `<Yes>` confirmation buttons.
 - **Session Reuse & Migration**: Seamlessly reuses existing cached credentials from ncspot (`~/.cache/ncspot/librespot/credentials.json`) to minimize re-authentication friction for transitioning users.
 
@@ -98,6 +99,10 @@ Both `127.0.0.1` and `::1` are supported for loopback callbacks, including HTTPS
 | `←` / `→` | Toggle between `<No>` and `<Yes>` in dialog |
 | `Enter` (in dialog) | Confirm selected option |
 | `Esc` | Cancel dialog and return to player |
+
+Shuffle displays `[?]` until Spotify reports its state. Pressing `s` before synchronization queues your intent: an odd number of presses toggles the observed state once; an even number leaves it unchanged. Later Spotify shuffle changes are reflected in the badge.
+
+`Enter` pauses or resumes the playing occurrence when its row is selected; selecting another row starts that exact playlist position. If Spotify reports a repeated song without a confirmed local selection, Rukia leaves the row checkmark unresolved and continues showing the current song in the bottom bar. Spotify does not report occurrence identity, so external jumps or automatic transitions between identical songs cannot distinguish their rows. Exact selection uses the playlist as loaded; playlist edits made elsewhere require reloading it.
 
 ## Architecture
 
