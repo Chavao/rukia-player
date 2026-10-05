@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Chavao/rukia-player/internal/auth"
+	"github.com/Chavao/rukia-player/internal/mpris"
 	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
 	"github.com/Chavao/rukia-player/internal/ui"
@@ -194,7 +195,21 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	} else {
 		model.SetPlaybackInitialState(false)
 	}
+
+	mprisServer, err := mpris.NewServer()
+	if err != nil {
+		fmt.Printf("Notice: MPRIS D-Bus service unavailable (%v)\n", err)
+	} else {
+		defer mprisServer.Close()
+		model.SetMPRIS(mprisServer)
+	}
+
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
+	if mprisServer != nil {
+		mprisServer.SetSender(func(msg any) {
+			p.Send(msg)
+		})
+	}
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
