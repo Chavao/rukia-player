@@ -384,6 +384,48 @@ func (c *Client) Pause(ctx context.Context, deviceID string) error {
 	return checkError(resp)
 }
 
+// Next skips to the next track in the user's queue.
+func (c *Client) Next(ctx context.Context, deviceID string) error {
+	endpoint := c.endpointBase() + "/me/player/next"
+	if deviceID != "" {
+		endpoint += "?device_id=" + url.QueryEscape(deviceID)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("failed to skip to next track: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return checkError(resp)
+}
+
+// Previous skips to the previous track in the user's queue.
+func (c *Client) Previous(ctx context.Context, deviceID string) error {
+	endpoint := c.endpointBase() + "/me/player/previous"
+	if deviceID != "" {
+		endpoint += "?device_id=" + url.QueryEscape(deviceID)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("failed to skip to previous track: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return checkError(resp)
+}
+
 // SetVolume sets the playback volume percentage (0-100).
 func (c *Client) SetVolume(ctx context.Context, deviceID string, volumePercent int) error {
 	if volumePercent < 0 {

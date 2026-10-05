@@ -599,3 +599,55 @@ func TestClientGetWithTransient503(t *testing.T) {
 		t.Errorf("expected 2 attempts, got %d", attempts)
 	}
 }
+
+func TestClientNext(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/me/player/next" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("device_id") != "dev123" {
+			t.Errorf("unexpected device_id: %s", r.URL.Query().Get("device_id"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	if err := c.Next(context.Background(), "dev123"); err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if !called {
+		t.Error("handler was not called")
+	}
+}
+
+func TestClientPrevious(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/me/player/previous" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("device_id") != "dev456" {
+			t.Errorf("unexpected device_id: %s", r.URL.Query().Get("device_id"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	c := &Client{httpClient: ts.Client(), apiBase: ts.URL}
+	if err := c.Previous(context.Background(), "dev456"); err != nil {
+		t.Fatalf("Previous failed: %v", err)
+	}
+	if !called {
+		t.Error("handler was not called")
+	}
+}
