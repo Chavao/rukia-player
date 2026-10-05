@@ -42,6 +42,7 @@ whether someone is familiar with the series.
 - **Cyan TUI Theme**: Header stats, track listing (Artist - Album, Title, Duration), bold cyan selection text on a dark blue background, shuffle/repeat badges, and bottom progress bar with transient error notices.
 - **Exact Playlist Selection**: Playing a selected row starts that occurrence, including songs repeated in the same playlist. The playing checkmark stays on the acknowledged occurrence while the cursor moves independently.
 - **Unplayable Track Handling**: Tracks restricted or unavailable in the active account's market are visually dimmed in the track table and automatically bypassed during keyboard navigation.
+- **MPRIS v2 D-Bus Remote Control**: Full MPRIS interface (`org.mpris.MediaPlayer2`) supporting `playerctl` (`play-pause`, `next`, `previous`, `status`, `metadata`, `volume`), media keys, and desktop environment integration (GNOME, KDE Plasma, Polybar, Waybar).
 - **Exit Confirmation Dialog**: Modal dialog (`Ctrl+q`, `q`, `Ctrl+c`) with `<No>` and `<Yes>` confirmation buttons.
 - **Internal Authentication**: Uses rukia-player's own OAuth implementation and cached streaming credentials.
 
@@ -125,6 +126,8 @@ Both `127.0.0.1` and `::1` are supported for loopback callbacks, including HTTPS
 | `↓` / `j` | Move cursor down in track list |
 | `Enter` | Contextual Play/Pause (toggles current track or plays selected track) |
 | `Space` | Toggle Play / Pause |
+| `n` / `>` | Skip to next track |
+| `p` / `<` | Skip to previous track |
 | `+` / `=` | Increase volume |
 | `-` / `_` | Decrease volume |
 | `s` | Toggle shuffle |
@@ -138,11 +141,39 @@ Shuffle displays `[?]` until Spotify reports its state. Pressing `s` before sync
 
 `Enter` pauses or resumes the playing occurrence when its row is selected; selecting another row starts that exact playlist position. If Spotify reports a repeated song without a confirmed local selection, rukia-player leaves the row checkmark unresolved and continues showing the current song in the bottom bar. Spotify does not report occurrence identity, so external jumps or automatic transitions between identical songs cannot distinguish their rows. Exact selection uses the playlist as loaded; playlist edits made elsewhere require reloading it.
 
+## Media Control (MPRIS & playerctl)
+
+`rukia-player` implements the standard [MPRIS v2 D-Bus specification](https://specifications.freedesktop.org/mpris-spec/latest/), allowing complete playback control via CLI tools like `playerctl` and system media shortcuts or widgets.
+
+You can control playback using `playerctl`:
+
+```bash
+# Toggle play/pause
+playerctl -p rukia-player play-pause
+
+# Skip to next or previous track
+playerctl -p rukia-player next
+playerctl -p rukia-player previous
+
+# Check playback status and track metadata
+playerctl -p rukia-player status
+playerctl -p rukia-player metadata
+playerctl -p rukia-player metadata title
+playerctl -p rukia-player metadata artist
+
+# Adjust volume (0.0 to 1.0)
+playerctl -p rukia-player volume 0.8
+```
+
+> [!NOTE]
+> The MPRIS service registers under `org.mpris.MediaPlayer2.rukia-player`, with `rukia` and `go-librespot` registered as aliases. You can use `-p rukia-player`, `-p rukia`, `-p go-librespot`, or simply omit `-p` if `rukia-player` is the primary active player.
+
 ## Architecture
 
-- **`cmd/rukia/`**: Application entry point.
+- **`cmd/rukia-player/`**: Application entry point.
 - **`internal/app/`**: Application lifecycle orchestration, CLI argument parsing, and error boundaries.
 - **`internal/auth/`**: Spotify OAuth 2.0 PKCE flow, callback server, optional in-memory TLS certificate generation, configuration persistence.
+- **`internal/mpris/`**: MPRIS v2 D-Bus service implementation for `playerctl` and desktop environment integration.
 - **`internal/spotify/`**: Spotify Web API client, playlist metadata and track pagination, player controls.
 - **`internal/player/`**: Embedded `go-librespot` daemon lifecycle and PulseAudio sink.
 - **`internal/ui/`**: Bubble Tea model, Lip Gloss styles, exit modal overlay, and renderers.
