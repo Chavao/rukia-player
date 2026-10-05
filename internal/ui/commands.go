@@ -53,6 +53,38 @@ func (m *Model) playTrackIndexCmd(idx int) tea.Cmd {
 	}
 }
 
+func (m *Model) skipNextCmd() tea.Cmd {
+	client := m.spotifyClient
+	deviceID := m.deviceID
+	parent := m.ctx
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+		defer cancel()
+
+		var err error
+		if client != nil {
+			err = client.Next(ctx, deviceID)
+		}
+		return actionResultMsg{action: "skip next", err: err}
+	}
+}
+
+func (m *Model) skipPreviousCmd() tea.Cmd {
+	client := m.spotifyClient
+	deviceID := m.deviceID
+	parent := m.ctx
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+		defer cancel()
+
+		var err error
+		if client != nil {
+			err = client.Previous(ctx, deviceID)
+		}
+		return actionResultMsg{action: "skip previous", err: err}
+	}
+}
+
 func (m *Model) setVolumeCmd(vol int) tea.Cmd {
 	client := m.spotifyClient
 	deviceID := m.deviceID

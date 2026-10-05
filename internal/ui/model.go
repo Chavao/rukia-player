@@ -55,6 +55,8 @@ type SpotifyController interface {
 	SetVolume(ctx context.Context, deviceID string, volumePercent int) error
 	SetShuffle(ctx context.Context, deviceID string, state bool) error
 	SetRepeat(ctx context.Context, deviceID string, state string) error
+	Next(ctx context.Context, deviceID string) error
+	Previous(ctx context.Context, deviceID string) error
 }
 
 // VolumeSettings provides persisted volume without exposing configuration to the UI.
@@ -75,6 +77,7 @@ type Model struct {
 	volumeSettings VolumeSettings
 	trackIndex     map[string][]int
 	currentTrack   *spotify.Track
+	mpris          MPRISNotifier
 
 	cursor                       int
 	playingIdx                   int
@@ -252,6 +255,14 @@ func pollCmd(interval time.Duration) tea.Cmd {
 
 // Update processes incoming messages, keys, and timer ticks.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if cmd, handled := m.handleMprisMessage(msg); handled {
+		var cmds []tea.Cmd
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -292,6 +303,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionResultMsg:
 		if msg.action == "play track" {
 			cmds = append(cmds, m.finishPlaybackCommand(msg.version, true, msg.err, msg.action))
+		} else if msg.action == "skip next" || msg.action == "skip previous" {
+			if msg.err != nil {
+				cmds = append(cmds, m.showError(fmt.Errorf("failed to %s: %w", msg.action, msg.err), 3*time.Second))
+			}
+			cmds = append(cmds, m.pollPlaybackCmd())
 		} else if msg.action == "change volume" {
 			cmds = append(cmds, m.finishVolumeCommand(msg))
 		} else if msg.action == "toggle shuffle" {
@@ -382,6 +398,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Space):
 			cmds = append(cmds, m.togglePlayback())
+
+		case key.Matches(msg, m.keys.Next):
+			cmds = append(cmds, m.skipNext())
+
+		case key.Matches(msg, m.keys.Prev):
+			cmds = append(cmds, m.skipPrevious())
 
 		case key.Matches(msg, m.keys.VolumeUp):
 			if m.volume < 100 {

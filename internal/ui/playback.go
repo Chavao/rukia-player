@@ -54,6 +54,13 @@ func (m *Model) togglePlayback() tea.Cmd {
 	m.desiredPlaying = !m.desiredPlaying
 	m.isPlaying = m.desiredPlaying
 	m.playbackVersion.Add(1)
+	if m.mpris != nil {
+		status := "Paused"
+		if m.isPlaying {
+			status = "Playing"
+		}
+		m.mpris.UpdateStatus(status)
+	}
 	if m.playbackPending || m.playbackReconcile {
 		return nil
 	}
@@ -72,6 +79,10 @@ func (m *Model) selectTrack(idx int) tea.Cmd {
 	m.currentTrack = &m.playlist.Tracks[idx]
 	m.desiredPlaying, m.isPlaying = true, true
 	m.playbackVersion.Add(1)
+	if m.mpris != nil {
+		m.mpris.UpdateStatus("Playing")
+		m.mpris.UpdateTrack(m.currentTrack)
+	}
 	if m.playbackPending || m.playbackReconcile {
 		return nil
 	}
@@ -119,6 +130,13 @@ func (m *Model) finishPlaybackCommand(version uint64, playing bool, err error, a
 		return tea.Batch(errorCmd, m.pollPlaybackCmd())
 	}
 	m.confirmedPlaying = playing
+	if m.mpris != nil {
+		status := "Paused"
+		if playing {
+			status = "Playing"
+		}
+		m.mpris.UpdateStatus(status)
+	}
 	if m.requestedTrack >= 0 {
 		m.confirmationTrack = m.requestedTrack
 		m.confirmedTrackIdx = m.requestedTrack
@@ -186,6 +204,15 @@ func (m *Model) observePlaybackPoll(state *spotify.PlaybackState, volumeGenerati
 	m.observeTrack(state.Item)
 	if state.IsPlaying {
 		m.clearInitialPlaybackError()
+	}
+	if m.mpris != nil {
+		status := "Stopped"
+		if state.IsPlaying {
+			status = "Playing"
+		} else if m.currentTrack != nil {
+			status = "Paused"
+		}
+		m.mpris.UpdatePlaybackState(status, m.currentTrack, m.volume, m.shuffle, m.repeatMode, m.progressMs)
 	}
 	return next
 }

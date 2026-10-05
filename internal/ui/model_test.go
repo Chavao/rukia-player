@@ -739,6 +739,8 @@ type mockSpotifyController struct {
 	setVolumeFunc        func(ctx context.Context, deviceID string, volumePercent int) error
 	setShuffleFunc       func(ctx context.Context, deviceID string, state bool) error
 	setRepeatFunc        func(ctx context.Context, deviceID string, state string) error
+	nextFunc             func(ctx context.Context, deviceID string) error
+	previousFunc         func(ctx context.Context, deviceID string) error
 }
 
 func (m *mockSpotifyController) GetPlaybackState(ctx context.Context) (*spotify.PlaybackState, error) {
@@ -780,6 +782,18 @@ func (m *mockSpotifyController) SetShuffle(ctx context.Context, deviceID string,
 func (m *mockSpotifyController) SetRepeat(ctx context.Context, deviceID string, state string) error {
 	if m.setRepeatFunc != nil {
 		return m.setRepeatFunc(ctx, deviceID, state)
+	}
+	return nil
+}
+func (m *mockSpotifyController) Next(ctx context.Context, deviceID string) error {
+	if m.nextFunc != nil {
+		return m.nextFunc(ctx, deviceID)
+	}
+	return nil
+}
+func (m *mockSpotifyController) Previous(ctx context.Context, deviceID string) error {
+	if m.previousFunc != nil {
+		return m.previousFunc(ctx, deviceID)
 	}
 	return nil
 }

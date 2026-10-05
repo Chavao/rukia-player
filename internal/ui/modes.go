@@ -56,6 +56,9 @@ func (m *Model) finishShuffleCommand(msg actionResultMsg) tea.Cmd {
 		m.shuffleAwaitingConfirmation = false
 		return tea.Batch(errorCmd, m.pollPlaybackCmd())
 	}
+	if m.mpris != nil {
+		m.mpris.UpdateShuffle(m.shuffle)
+	}
 	m.shuffleAwaitingConfirmation = true
 	m.shuffleObservationCount = 0
 	return nil
@@ -106,6 +109,9 @@ func (m *Model) finishRepeatCommand(msg actionResultMsg) tea.Cmd {
 	if msg.err != nil {
 		m.repeatAwaitingConfirmation = false
 		return tea.Batch(errorCmd, m.pollPlaybackCmd())
+	}
+	if m.mpris != nil {
+		m.mpris.UpdateRepeat(m.repeatMode)
 	}
 	m.repeatAwaitingConfirmation = true
 	m.repeatObservationCount = 0

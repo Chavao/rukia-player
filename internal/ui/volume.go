@@ -38,6 +38,9 @@ func (m *Model) changeVolume() tea.Cmd {
 	if m.volumeSettings == nil {
 		m.resolvedVolumeGeneration = m.volumeGeneration.Load()
 	}
+	if m.mpris != nil {
+		m.mpris.UpdateVolume(m.volume)
+	}
 	if m.volumePending {
 		return persist
 	}
@@ -85,4 +88,7 @@ func (m *Model) observeVolume(device *spotify.Device, generation uint64) {
 		m.volumeAwaitingConfirmation = false
 	}
 	m.volume, m.desiredVolume = device.VolumePercent, device.VolumePercent
+	if m.mpris != nil {
+		m.mpris.UpdateVolume(m.volume)
+	}
 }

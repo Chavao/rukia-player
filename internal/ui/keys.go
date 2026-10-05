@@ -10,6 +10,8 @@ type KeyMap struct {
 	Right    key.Binding
 	Enter    key.Binding
 	Space    key.Binding
+	Next     key.Binding
+	Prev     key.Binding
 	VolumeUp key.Binding
 	VolumeDn key.Binding
 	Shuffle  key.Binding
@@ -44,6 +46,14 @@ func DefaultKeyMap() KeyMap {
 		Space: key.NewBinding(
 			key.WithKeys(" "),
 			key.WithHelp("space", "pause/resume"),
+		),
+		Next: key.NewBinding(
+			key.WithKeys("n", ">"),
+			key.WithHelp("n/>", "next track"),
+		),
+		Prev: key.NewBinding(
+			key.WithKeys("p", "<"),
+			key.WithHelp("p/<", "prev track"),
 		),
 		VolumeUp: key.NewBinding(
 			key.WithKeys("+", "="),
