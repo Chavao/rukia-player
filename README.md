@@ -7,6 +7,12 @@ A lightweight, terminal-based Spotify music player written in Golang using [Bubb
 
 The application compiles to the command-line binary `rukia-player` and starts playing a specified Spotify playlist immediately upon invocation.
 
+### Playlist Support ⚠️
+
+Currently, the player supports playlists provided directly through the command line.
+
+Support for browsing playlists from the user's Spotify account, listing available playlists, and navigating between them is planned and included in the project roadmap.
+
 ## Why `rukia-player`?
 
 The project is named after Rukia Kuchiki from *Bleach*. The connection is
