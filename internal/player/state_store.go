@@ -49,7 +49,7 @@ func (s *FileStateStore) Load() (*librespot.AppState, error) {
 		state.DeviceId = legacyDeviceID(s.cacheDir)
 	}
 
-	// Search for credentials in rukia cache, then fallback candidates.
+	// Search for credentials in rukia-player cache, then fallback candidates.
 	candidatePaths := []string{
 		filepath.Join(s.cacheDir, "credentials.json"),
 	}

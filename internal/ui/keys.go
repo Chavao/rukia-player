@@ -2,7 +2,7 @@ package ui
 
 import "github.com/charmbracelet/bubbles/key"
 
-// KeyMap defines the keybindings for the rukia player.
+// KeyMap defines the keybindings for the rukia-player player.
 type KeyMap struct {
 	Up       key.Binding
 	Down     key.Binding

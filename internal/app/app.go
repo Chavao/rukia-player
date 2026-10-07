@@ -22,22 +22,22 @@ var Version = "dev"
 
 // PrintUsage prints CLI usage documentation to w.
 func PrintUsage(w io.Writer) {
-	fmt.Fprintf(w, "rukia v%s - CLI Spotify Player\n\n", Version)
+	fmt.Fprintf(w, "rukia-player v%s - CLI Spotify Player\n\n", Version)
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  rukia <playlist-id-or-url>")
+	fmt.Fprintln(w, "  rukia-player <playlist-id-or-url>")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Examples:")
-	fmt.Fprintln(w, "  rukia 6UUCMxk575eDTwSWa0qQhB")
-	fmt.Fprintln(w, "  rukia '6UUCMxk575eDTwSWa0qQhB?si=fa799fec9a404660'")
-	fmt.Fprintln(w, "  rukia https://open.spotify.com/playlist/6UUCMxk575eDTwSWa0qQhB")
-	fmt.Fprintln(w, "  rukia spotify:playlist:6UUCMxk575eDTwSWa0qQhB")
+	fmt.Fprintln(w, "  rukia-player 6UUCMxk575eDTwSWa0qQhB")
+	fmt.Fprintln(w, "  rukia-player '6UUCMxk575eDTwSWa0qQhB?si=fa799fec9a404660'")
+	fmt.Fprintln(w, "  rukia-player https://open.spotify.com/playlist/6UUCMxk575eDTwSWa0qQhB")
+	fmt.Fprintln(w, "  rukia-player spotify:playlist:6UUCMxk575eDTwSWa0qQhB")
 }
 
 // Run orchestrates configuration, authentication, player startup, and the TUI lifecycle.
 func Run(ctx context.Context, args []string) (runErr error) {
 	ctx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	fs := flag.NewFlagSet("rukia", flag.ContinueOnError)
+	fs := flag.NewFlagSet("rukia-player", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
 	var showVersion bool
@@ -52,7 +52,7 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	}
 
 	if showVersion {
-		fmt.Printf("rukia v%s\n", Version)
+		fmt.Printf("rukia-player v%s\n", Version)
 		return nil
 	}
 	if showHelp {
@@ -171,7 +171,7 @@ func Run(ctx context.Context, args []string) (runErr error) {
 		return fmt.Errorf("failed to save last playlist: %w", err)
 	}
 
-	// 8. Find target device (rukia or active device)
+	// 8. Find target device (rukia-player or active device)
 	deviceCtx, cancelDeviceDiscovery := context.WithTimeout(startupCtx, 5*time.Second)
 	defer cancelDeviceDiscovery()
 	targetDeviceID := discoverDevice(deviceCtx, spotifyClient, playerEngine.DeviceName(), 8, 500*time.Millisecond)
@@ -232,7 +232,7 @@ func configuredEngine(cfg *auth.Config) (*player.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return player.NewEngine("rukia", player.WithDeviceID(deviceID)), nil
+	return player.NewEngine("rukia-player", player.WithDeviceID(deviceID)), nil
 }
 
 func formatStartupError(phase string, err error) error {

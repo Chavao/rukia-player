@@ -52,7 +52,7 @@ func TestConfiguredEnginePreservesMigratedIdentityAcrossCacheChanges(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			if engine.DeviceName() != "rukia" || cfg.DeviceID != want {
+			if engine.DeviceName() != "rukia-player" || cfg.DeviceID != want {
 				t.Fatalf("upgrade: name=%q ID=%q want=%q", engine.DeviceName(), cfg.DeviceID, want)
 			}
 			for range 2 {

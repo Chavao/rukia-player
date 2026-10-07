@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	DefaultDeviceName = "rukia"
-	DefaultMediaName  = "rukia Spotify Player"
+	DefaultDeviceName = "rukia-player"
+	DefaultMediaName  = "rukia-player Spotify Player"
 )
 
 // Engine manages the embedded go-librespot player daemon and PulseAudio output.

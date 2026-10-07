@@ -393,7 +393,7 @@ func PromptCredentialsIfMissing(cfg *Config) error {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("=================================================================")
-	fmt.Println("rukia - Spotify CLI Player Setup")
+	fmt.Println("rukia-player - Spotify CLI Player Setup")
 	fmt.Println("Spotify Client ID not found.")
 	fmt.Println("Please register an application at https://developer.spotify.com/dashboard")
 	fmt.Printf("Ensure Redirect URI is set to: %s\n", cfg.RedirectURI)

@@ -291,9 +291,9 @@ func TestPlayerctlCommandIntegration(t *testing.T) {
 		t.Error("expected message from previous")
 	}
 
-	// 6. playerctl -p rukia play-pause (using alias)
+	// 6. playerctl -p rukia-player play-pause (using alias)
 	if err := exec.Command("playerctl", "-p", "rukia", "play-pause").Run(); err != nil {
-		t.Fatalf("playerctl -p rukia play-pause failed: %v", err)
+		t.Fatalf("playerctl -p rukia-player play-pause failed: %v", err)
 	}
 	select {
 	case msg := <-ch:

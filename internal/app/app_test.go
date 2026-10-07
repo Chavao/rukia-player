@@ -96,7 +96,7 @@ func TestPrintUsage(t *testing.T) {
 	PrintUsage(&buf)
 	output := buf.String()
 
-	if !strings.Contains(output, "rukia v") {
+	if !strings.Contains(output, "rukia-player v") {
 		t.Errorf("expected usage to contain version, got: %s", output)
 	}
 	if !strings.Contains(output, "Usage:") {
@@ -136,7 +136,7 @@ func TestDiscoverDeviceRespectsBudget(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
-	if got := discoverDevice(ctx, client, "rukia", 8, 500*time.Millisecond); got != "" {
+	if got := discoverDevice(ctx, client, "rukia-player", 8, 500*time.Millisecond); got != "" {
 		t.Fatalf("expected no device after deadline, got %q", got)
 	}
 	if calls != 1 {
@@ -148,7 +148,7 @@ func TestDiscoverDeviceKeepsActiveFallback(t *testing.T) {
 	client := deviceListerFunc(func(context.Context) ([]spotify.Device, error) {
 		return []spotify.Device{{ID: "first"}, {ID: "active", IsActive: true}}, nil
 	})
-	if got := discoverDevice(context.Background(), client, "rukia", 2, 0); got != "active" {
+	if got := discoverDevice(context.Background(), client, "rukia-player", 2, 0); got != "active" {
 		t.Fatalf("expected active fallback, got %q", got)
 	}
 }
@@ -173,7 +173,7 @@ func TestDiscoverDeviceUsesLatestSuccessfulFallback(t *testing.T) {
 				}
 				return tc.second, tc.secondErr
 			})
-			if got := discoverDevice(context.Background(), client, "rukia", 2, 0); got != tc.want {
+			if got := discoverDevice(context.Background(), client, "rukia-player", 2, 0); got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 			if calls != 2 {
