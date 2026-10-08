@@ -187,4 +187,18 @@ playerctl -p rukia-player volume 0.8
 
 ## License
 
-MIT
+Copyright (c) 2026 Diego Chavão.
+
+The `rukia-player` combined executable, which incorporates `go-librespot`,
+is distributed under the **GNU General Public License version 3 only**
+([GPL-3.0-only](LICENSE)). The full license is also provided in
+[`LICENSES/GPL-3.0-only.txt`](LICENSES/GPL-3.0-only.txt).
+
+The project's original MIT license notice is preserved in
+[`LICENSES/MIT.txt`](LICENSES/MIT.txt). Separately licensed third-party
+components retain their respective copyright and license terms; see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+Redistributors of compiled binaries must also meet applicable GPLv3
+obligations, including providing the complete corresponding source code
+and required third-party license notices. See the GPLv3 for details.
