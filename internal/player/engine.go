@@ -70,7 +70,7 @@ func (e *Engine) Start(parentCtx context.Context, username, accessToken string) 
 	// Set PulseAudio properties so pavucontrol-qt and PipeWire show "rukia".
 	for key, value := range map[string]string{
 		"PULSE_PROP_application.name":           e.deviceName,
-		"PULSE_PROP_application.process.binary": "rukia",
+		"PULSE_PROP_application.process.binary": "rukia-player",
 		"PULSE_PROP_media.role":                 "music",
 		"PULSE_PROP_media.name":                 DefaultMediaName,
 	} {
