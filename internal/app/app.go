@@ -115,7 +115,7 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	cancelUser()
 	if err != nil {
 		var apiErr *spotify.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
+		if (errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized) || errors.Is(err, auth.ErrReauthenticationRequired) {
 			// If token was rejected with 401, re-authenticate once
 			fmt.Printf("Session expired (401), re-authenticating: %v\n", err)
 			if _, err := oauthFlow.RunInteractiveLogin(ctx); err != nil {
