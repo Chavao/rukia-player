@@ -2,11 +2,13 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Chavao/rukia-player/internal/auth"
 	"github.com/Chavao/rukia-player/internal/player"
 	"github.com/Chavao/rukia-player/internal/spotify"
 	"github.com/charmbracelet/bubbles/key"
@@ -17,7 +19,14 @@ type tickMsg time.Time
 type pollMsg time.Time
 type playbackStateMsg *spotify.PlaybackState
 type playerErrorMsg struct{ err error }
+type playerReconnectMsg struct{ attempt int }
+type playerReconnectedMsg struct {
+	attempt int
+	err     error
+}
 type errMsg struct{ err error }
+
+var playerReconnectBaseDelay = time.Second
 type playbackChangedMsg struct {
 	version uint64
 	playing bool
@@ -135,6 +144,8 @@ type Model struct {
 	showExitModal bool
 	exitDialog    ExitDialog
 	keys          KeyMap
+
+	playerReconnectAttempts int
 
 	width                  int
 	height                 int
@@ -296,6 +307,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case playerErrorMsg:
 		cmds = append(cmds, m.showError(fmt.Errorf("audio player error: %w", msg.err), 5*time.Second))
+		if m.playerEngine != nil && m.playerReconnectAttempts < 3 {
+			m.playerReconnectAttempts++
+			cmds = append(cmds, m.reconnectPlayerCmd(m.playerReconnectAttempts))
+		}
+
+	case playerReconnectMsg:
+		cmds = append(cmds, m.restartPlayerEngineCmd(msg.attempt))
+
+	case playerReconnectedMsg:
+		if msg.err == nil {
+			m.playerReconnectAttempts = 0
+			cmds = append(cmds, m.waitForPlayerErrorCmd(), m.pollPlaybackCmd())
+		} else {
+			cmds = append(cmds, m.showError(fmt.Errorf("audio player reconnect failed: %w", msg.err), 5*time.Second))
+			if m.playerReconnectAttempts < 3 {
+				m.playerReconnectAttempts++
+				cmds = append(cmds, m.reconnectPlayerCmd(m.playerReconnectAttempts))
+			}
+		}
 
 	case playbackChangedMsg:
 		cmds = append(cmds, m.finishPlaybackCommand(msg.version, msg.playing, msg.err, "toggle playback"))
@@ -437,9 +467,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) showError(err error, duration time.Duration) tea.Cmd {
+	if errors.Is(err, auth.ErrReauthenticationRequired) {
+		duration = 10 * time.Second
+	}
 	m.err = err
 	m.errorGeneration++
 	return clearErrorCmd(duration, m.errorGeneration)
+}
+
+func (m *Model) reconnectPlayerCmd(attempt int) tea.Cmd {
+	delay := playerReconnectBaseDelay * time.Duration(1<<(attempt-1))
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return playerReconnectMsg{attempt: attempt}
+	})
+}
+
+func (m *Model) restartPlayerEngineCmd(attempt int) tea.Cmd {
+	engine := m.playerEngine
+	parent := m.ctx
+	return func() tea.Msg {
+		if engine == nil {
+			return playerReconnectedMsg{attempt: attempt, err: nil}
+		}
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+		defer cancel()
+		err := engine.Restart(ctx)
+		return playerReconnectedMsg{attempt: attempt, err: err}
+	}
 }
 
 // SetPlaybackInitialState overrides the initial playing and intent state.

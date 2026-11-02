@@ -873,3 +873,124 @@ func TestModelExtremeTerminalDimensions(t *testing.T) {
 		}
 	}
 }
+
+func TestModelPlayerEngineReconnectFlow(t *testing.T) {
+	origDelay := playerReconnectBaseDelay
+	playerReconnectBaseDelay = time.Millisecond
+	defer func() { playerReconnectBaseDelay = origDelay }()
+
+	var restartCalls int
+	engine := player.NewEngine("test-reconnect",
+		player.WithDeviceID(strings.Repeat("a", 40)),
+		player.WithStarter(func(ctx context.Context, username, accessToken string) error {
+			restartCalls++
+			return nil
+		}),
+	)
+	if err := engine.Start(context.Background(), "user1", "tok1"); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	model := NewModel(nil, engine, nil, nil, "dev-1")
+
+	// 1. Daemon error arrives
+	m, cmd := model.Update(playerErrorMsg{err: errors.New("daemon crashed")})
+	model = m.(*Model)
+	if model.playerReconnectAttempts != 1 {
+		t.Fatalf("reconnect attempts = %d, want 1", model.playerReconnectAttempts)
+	}
+	if cmd == nil {
+		t.Fatal("expected cmd after player error")
+	}
+
+	// 2. Scheduled tick fires -> playerReconnectMsg
+	var reconnectMsg tea.Msg
+	// cmd is a batch of showError and tick
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			if c != nil {
+				res := c()
+				if rMsg, ok := res.(playerReconnectMsg); ok {
+					reconnectMsg = rMsg
+				}
+			}
+		}
+	case playerReconnectMsg:
+		reconnectMsg = msg
+	}
+
+	if reconnectMsg == nil {
+		// Wait short moment for tick
+		time.Sleep(5 * time.Millisecond)
+		reconnectMsg = playerReconnectMsg{attempt: 1}
+	}
+
+	// 3. Reconnect command runs -> playerReconnectedMsg
+	m, restartCmd := model.Update(reconnectMsg)
+	model = m.(*Model)
+	if restartCmd == nil {
+		t.Fatal("expected restart cmd")
+	}
+	resMsg := restartCmd()
+	reconnectedMsg, ok := resMsg.(playerReconnectedMsg)
+	if !ok || reconnectedMsg.err != nil {
+		t.Fatalf("unexpected restart result: %v", resMsg)
+	}
+	if restartCalls != 2 {
+		t.Fatalf("expected 2 starter calls (1 start + 1 restart), got %d", restartCalls)
+	}
+
+	// 4. Success resets reconnect attempts
+	m, _ = model.Update(reconnectedMsg)
+	model = m.(*Model)
+	if model.playerReconnectAttempts != 0 {
+		t.Fatalf("reconnect attempts after success = %d, want 0", model.playerReconnectAttempts)
+	}
+}
+
+func TestModelPlayerEngineReconnectMaxAttempts(t *testing.T) {
+	origDelay := playerReconnectBaseDelay
+	playerReconnectBaseDelay = time.Millisecond
+	defer func() { playerReconnectBaseDelay = origDelay }()
+
+	engine := player.NewEngine("test-reconnect-max",
+		player.WithDeviceID(strings.Repeat("a", 40)),
+		player.WithStarter(func(ctx context.Context, username, accessToken string) error {
+			return errors.New("cannot start")
+		}),
+	)
+
+	model := NewModel(nil, engine, nil, nil, "dev-1")
+
+	// Simulate 3 failures
+	for i := 1; i <= 3; i++ {
+		m, _ := model.Update(playerReconnectedMsg{attempt: i, err: errors.New("restart failed")})
+		model = m.(*Model)
+	}
+
+	if model.playerReconnectAttempts != 3 {
+		t.Fatalf("attempts = %d, want 3", model.playerReconnectAttempts)
+	}
+
+	// 4th failure should not schedule further attempts
+	m, cmd := model.Update(playerReconnectedMsg{attempt: 4, err: errors.New("restart failed again")})
+	model = m.(*Model)
+	if model.playerReconnectAttempts != 3 {
+		t.Fatalf("attempts after 4th failure = %d, want 3", model.playerReconnectAttempts)
+	}
+	if cmd == nil {
+		t.Fatal("expected showError cmd")
+	}
+}
+
+func TestModelReauthenticationRequiredErrorDuration(t *testing.T) {
+	model := NewModel(nil, nil, nil, nil, "dev-1")
+	cmd := model.showError(auth.ErrReauthenticationRequired, time.Second)
+	if cmd == nil {
+		t.Fatal("expected cmd from showError")
+	}
+	if model.err != auth.ErrReauthenticationRequired {
+		t.Fatalf("model.err = %v, want ErrReauthenticationRequired", model.err)
+	}
+}
