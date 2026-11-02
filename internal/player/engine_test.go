@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -226,5 +227,114 @@ func TestDefaultCacheDir(t *testing.T) {
 	dirFallback := defaultCacheDir()
 	if dirFallback == "" {
 		t.Fatal("expected non-empty fallback cache dir")
+	}
+}
+
+func TestEngineRestartFetchesFreshToken(t *testing.T) {
+	var startCalls []struct {
+		username string
+		token    string
+	}
+	var runs []chan struct{}
+	var mu sync.Mutex
+
+	customStarter := func(ctx context.Context, username, accessToken string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		startCalls = append(startCalls, struct {
+			username string
+			token    string
+		}{username, accessToken})
+
+		runDone := make(chan struct{})
+		runs = append(runs, runDone)
+		return nil
+	}
+
+	currentToken := "tok1"
+	provider := func(ctx context.Context) (string, error) {
+		return currentToken, nil
+	}
+
+	var engine *Engine
+	engine = NewEngine("restart-test",
+		WithDeviceID(strings.Repeat("a", 40)),
+		WithTokenProvider(provider),
+		WithStarter(func(ctx context.Context, username, accessToken string) error {
+			if err := customStarter(ctx, username, accessToken); err != nil {
+				return err
+			}
+			runCtx, cancel := context.WithCancel(ctx)
+			engine.startRun(runCtx, cancel, nil, func(c context.Context) error {
+				<-c.Done()
+				return c.Err()
+			})
+			return nil
+		}),
+	)
+
+	ctx := context.Background()
+	if err := engine.Start(ctx, "user123", "tok1"); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if !engine.Running() {
+		t.Fatal("engine should be running after Start")
+	}
+
+	// Now update token provider and restart
+	currentToken = "tok2"
+	if err := engine.Restart(ctx); err != nil {
+		t.Fatalf("Restart failed: %v", err)
+	}
+	if !engine.Running() {
+		t.Fatal("engine should be running after Restart")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(startCalls) != 2 {
+		t.Fatalf("expected 2 start calls, got %d", len(startCalls))
+	}
+	if startCalls[0].token != "tok1" || startCalls[1].token != "tok2" {
+		t.Fatalf("tokens mismatch: got %v, want tok1 then tok2", startCalls)
+	}
+	if startCalls[1].username != "user123" {
+		t.Fatalf("username = %s, want user123", startCalls[1].username)
+	}
+
+	if err := engine.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+}
+
+func TestEngineRestartHandlesTokenProviderError(t *testing.T) {
+	providerErr := errors.New("cannot refresh token")
+	var engine *Engine
+	engine = NewEngine("restart-err-test",
+		WithDeviceID(strings.Repeat("a", 40)),
+		WithTokenProvider(func(ctx context.Context) (string, error) {
+			return "", providerErr
+		}),
+		WithStarter(func(ctx context.Context, username, accessToken string) error {
+			runCtx, cancel := context.WithCancel(ctx)
+			engine.startRun(runCtx, cancel, nil, func(c context.Context) error {
+				<-c.Done()
+				return c.Err()
+			})
+			return nil
+		}),
+	)
+
+	ctx := context.Background()
+	if err := engine.Start(ctx, "user123", "tok1"); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	err := engine.Restart(ctx)
+	if err == nil {
+		t.Fatal("expected error from Restart, got nil")
+	}
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("expected providerErr, got: %v", err)
 	}
 }
