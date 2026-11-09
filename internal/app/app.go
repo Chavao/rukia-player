@@ -106,7 +106,7 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	defer cancelStartup()
 
 	// 5. Initialize authenticated Spotify client
-	httpClient, _ := oauthFlow.Client(ctx, cfg.CurrentToken())
+	httpClient, tokenSource := oauthFlow.Client(ctx, cfg.CurrentToken())
 	spotifyClient := spotify.NewClient(httpClient)
 
 	// Fetch current user
@@ -115,7 +115,7 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	cancelUser()
 	if err != nil {
 		var apiErr *spotify.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
+		if (errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized) || errors.Is(err, auth.ErrReauthenticationRequired) {
 			// If token was rejected with 401, re-authenticate once
 			fmt.Printf("Session expired (401), re-authenticating: %v\n", err)
 			if _, err := oauthFlow.RunInteractiveLogin(ctx); err != nil {
@@ -125,7 +125,7 @@ func Run(ctx context.Context, args []string) (runErr error) {
 			cancelStartup()
 			startupCtx, cancelStartup = context.WithTimeout(ctx, 30*time.Second)
 			defer cancelStartup()
-			httpClient, _ = oauthFlow.Client(ctx, cfg.CurrentToken())
+			httpClient, tokenSource = oauthFlow.Client(ctx, cfg.CurrentToken())
 			spotifyClient = spotify.NewClient(httpClient)
 			retryUserCtx, cancelRetryUser := context.WithTimeout(startupCtx, 5*time.Second)
 			user, err = spotifyClient.GetCurrentUser(retryUserCtx)
@@ -146,6 +146,13 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	if volume := cfg.CurrentVolume(); volume >= 0 {
 		playerEngine.SetVolume(volume)
 	}
+	playerEngine.SetTokenProvider(func(tCtx context.Context) (string, error) {
+		tok, err := tokenSource.Token()
+		if err != nil {
+			return "", err
+		}
+		return tok.AccessToken, nil
+	})
 	if err := playerEngine.Start(ctx, user.ID, cfg.CurrentToken().AccessToken); err != nil {
 		fmt.Printf("Notice: PulseAudio audio sink initialization failed (%v)\n", err)
 	}

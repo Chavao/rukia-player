@@ -1,11 +1,14 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -447,5 +450,314 @@ func TestRuntimeRefreshParentCancellationStopsConcurrentCalls(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("pending token call ignored parent cancellation")
 		}
+	}
+}
+
+func TestRuntimeClientRefreshesAndRetriesOnceOn401(t *testing.T) {
+	var tokenCalls atomic.Int32
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"refreshed-token","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer tokenServer.Close()
+
+	var apiCalls atomic.Int32
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls.Add(1)
+		authHdr := r.Header.Get("Authorization")
+		if authHdr == "Bearer initial-valid" {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":{"status":401,"message":"The access token expired"}}`)
+			return
+		}
+		if authHdr == "Bearer refreshed-token" {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"ok"}`)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer apiServer.Close()
+
+	cfg := &Config{
+		ClientID: "client-id",
+		AuthFlow: "pkce",
+		Token: &oauth2.Token{
+			AccessToken:  "initial-valid",
+			RefreshToken: "refresh",
+			Expiry:       time.Now().Add(time.Hour),
+		},
+	}
+	flow := NewOAuthFlow(cfg)
+	flow.config.Endpoint.TokenURL = tokenServer.URL
+	var saves atomic.Int32
+	flow.saveToken = func(tok *oauth2.Token) error {
+		saves.Add(1)
+		return cfg.SetToken(tok)
+	}
+
+	apiClient, _ := flow.Client(context.Background(), cfg.CurrentToken())
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiServer.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := apiClient.Do(req)
+	if err != nil {
+		t.Fatalf("unexpected request error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if tokenCalls.Load() != 1 {
+		t.Fatalf("token calls = %d, want 1", tokenCalls.Load())
+	}
+	if apiCalls.Load() != 2 {
+		t.Fatalf("api calls = %d, want 2", apiCalls.Load())
+	}
+	if saves.Load() != 1 {
+		t.Fatalf("token saves = %d, want 1", saves.Load())
+	}
+	if cfg.CurrentToken().AccessToken != "refreshed-token" {
+		t.Fatalf("config token = %v, want refreshed-token", cfg.CurrentToken().AccessToken)
+	}
+}
+
+func TestRuntimeClientStopsAfterSecond401(t *testing.T) {
+	var tokenCalls atomic.Int32
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"refreshed-token","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer tokenServer.Close()
+
+	var apiCalls atomic.Int32
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"status":401,"message":"Unauthorized"}}`)
+	}))
+	defer apiServer.Close()
+
+	cfg := &Config{
+		ClientID: "client-id",
+		AuthFlow: "pkce",
+		Token: &oauth2.Token{
+			AccessToken:  "initial-valid",
+			RefreshToken: "refresh",
+			Expiry:       time.Now().Add(time.Hour),
+		},
+	}
+	flow := NewOAuthFlow(cfg)
+	flow.config.Endpoint.TokenURL = tokenServer.URL
+
+	apiClient, _ := flow.Client(context.Background(), cfg.CurrentToken())
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiServer.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := apiClient.Do(req)
+	if err != nil {
+		t.Fatalf("unexpected request error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	if tokenCalls.Load() != 1 {
+		t.Fatalf("token calls = %d, want 1", tokenCalls.Load())
+	}
+	if apiCalls.Load() != 2 {
+		t.Fatalf("api calls = %d, want 2 (initial + 1 retry)", apiCalls.Load())
+	}
+}
+
+func TestRuntimeClientRewindsRequestBodyOn401Retry(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"refreshed-token","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer tokenServer.Close()
+
+	expectedBody := `{"play":true}`
+	var receivedBodies []string
+	var mu sync.Mutex
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		receivedBodies = append(receivedBodies, string(b))
+		mu.Unlock()
+
+		authHdr := r.Header.Get("Authorization")
+		if authHdr == "Bearer initial-valid" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if authHdr == "Bearer refreshed-token" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer apiServer.Close()
+
+	cfg := &Config{
+		ClientID: "client-id",
+		AuthFlow: "pkce",
+		Token: &oauth2.Token{
+			AccessToken:  "initial-valid",
+			RefreshToken: "refresh",
+			Expiry:       time.Now().Add(time.Hour),
+		},
+	}
+	flow := NewOAuthFlow(cfg)
+	flow.config.Endpoint.TokenURL = tokenServer.URL
+
+	apiClient, _ := flow.Client(context.Background(), cfg.CurrentToken())
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, apiServer.URL, bytes.NewReader([]byte(expectedBody)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := apiClient.Do(req)
+	if err != nil {
+		t.Fatalf("unexpected request error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(receivedBodies) != 2 {
+		t.Fatalf("received %d bodies, want 2", len(receivedBodies))
+	}
+	if receivedBodies[0] != expectedBody || receivedBodies[1] != expectedBody {
+		t.Fatalf("bodies mismatch: %v, want both %q", receivedBodies, expectedBody)
+	}
+}
+
+func TestRuntimeClientReturnsReauthenticationRequiredOnInvalidGrant(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid_grant"}`)
+	}))
+	defer tokenServer.Close()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer apiServer.Close()
+
+	cfg := &Config{
+		ClientID: "client-id",
+		AuthFlow: "pkce",
+		Token: &oauth2.Token{
+			AccessToken:  "initial-valid",
+			RefreshToken: "revoked-refresh",
+			Expiry:       time.Now().Add(time.Hour),
+		},
+	}
+	flow := NewOAuthFlow(cfg)
+	flow.config.Endpoint.TokenURL = tokenServer.URL
+
+	apiClient, _ := flow.Client(context.Background(), cfg.CurrentToken())
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiServer.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = apiClient.Do(req)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrReauthenticationRequired) {
+		t.Fatalf("expected ErrReauthenticationRequired, got: %v", err)
+	}
+}
+
+func TestConcurrentRuntime401CoalescesRefresh(t *testing.T) {
+	var tokenCalls atomic.Int32
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenCalls.Add(1)
+		time.Sleep(50 * time.Millisecond) // Simulate network delay
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"refreshed-token","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer tokenServer.Close()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHdr := r.Header.Get("Authorization")
+		if authHdr == "Bearer initial-valid" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if authHdr == "Bearer refreshed-token" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer apiServer.Close()
+
+	cfg := &Config{
+		ClientID: "client-id",
+		AuthFlow: "pkce",
+		Token: &oauth2.Token{
+			AccessToken:  "initial-valid",
+			RefreshToken: "refresh",
+			Expiry:       time.Now().Add(time.Hour),
+		},
+	}
+	flow := NewOAuthFlow(cfg)
+	flow.config.Endpoint.TokenURL = tokenServer.URL
+
+	apiClient, _ := flow.Client(context.Background(), cfg.CurrentToken())
+
+	const concurrency = 4
+	var wg sync.WaitGroup
+	errs := make([]error, concurrency)
+	statusCodes := make([]int, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiServer.URL, nil)
+			if err != nil {
+				errs[idx] = err
+				return
+			}
+			resp, err := apiClient.Do(req)
+			if err != nil {
+				errs[idx] = err
+				return
+			}
+			defer resp.Body.Close()
+			statusCodes[idx] = resp.StatusCode
+		}(i)
+	}
+
+	wg.Wait()
+
+	for i := 0; i < concurrency; i++ {
+		if errs[i] != nil {
+			t.Fatalf("request %d failed: %v", i, errs[i])
+		}
+		if statusCodes[i] != http.StatusOK {
+			t.Fatalf("request %d status = %d, want 200", i, statusCodes[i])
+		}
+	}
+
+	if tokenCalls.Load() != 1 {
+		t.Fatalf("token endpoint calls = %d, want 1", tokenCalls.Load())
 	}
 }

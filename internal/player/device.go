@@ -1,6 +1,7 @@
 package player
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
@@ -14,6 +15,16 @@ type EngineOption func(*Engine)
 // WithDeviceID selects the application's persisted Spotify Connect identity.
 func WithDeviceID(deviceID string) EngineOption {
 	return func(engine *Engine) { engine.deviceID = deviceID }
+}
+
+// WithTokenProvider configures a function to fetch a fresh OAuth access token on restart.
+func WithTokenProvider(provider func(context.Context) (string, error)) EngineOption {
+	return func(engine *Engine) { engine.tokenProvider = provider }
+}
+
+// WithStarter configures a custom start function, primarily for testing.
+func WithStarter(starter func(ctx context.Context, username, accessToken string) error) EngineOption {
+	return func(engine *Engine) { engine.starter = starter }
 }
 
 // LegacyDeviceID returns the identity advertised by released main before XDG

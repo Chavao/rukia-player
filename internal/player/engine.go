@@ -19,15 +19,19 @@ const (
 
 // Engine manages the embedded go-librespot player daemon and PulseAudio output.
 type Engine struct {
-	deviceName string
-	deviceID   string
-	app        *daemon.App
-	cancel     context.CancelFunc
-	errCh      chan error
-	doneCh     chan struct{}
-	mu         sync.Mutex
-	running    bool
-	volume     int // 0 to 100
+	deviceName    string
+	deviceID      string
+	app           *daemon.App
+	cancel        context.CancelFunc
+	errCh         chan error
+	doneCh        chan struct{}
+	mu            sync.Mutex
+	running       bool
+	volume        int // 0 to 100
+	username      string
+	accessToken   string
+	tokenProvider func(context.Context) (string, error)
+	starter       func(ctx context.Context, username, accessToken string) error
 }
 
 // NewEngine creates a new player engine instance.
@@ -53,18 +57,28 @@ func (e *Engine) DeviceName() string {
 // Start launches the embedded Spotify Connect receiver and PulseAudio stream.
 func (e *Engine) Start(parentCtx context.Context, username, accessToken string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if e.running || e.app != nil {
+		e.mu.Unlock()
 		return errors.New("player engine is already running")
 	}
 
 	if err := validateDeviceID(e.deviceID); err != nil {
+		e.mu.Unlock()
 		return err
 	}
 
 	if username == "" || accessToken == "" {
+		e.mu.Unlock()
 		return errors.New("username and access token are required to start audio engine")
+	}
+
+	e.username = username
+	e.accessToken = accessToken
+	starter := e.starter
+	e.mu.Unlock()
+
+	if starter != nil {
+		return starter(parentCtx, username, accessToken)
 	}
 
 	// Set PulseAudio properties so pavucontrol-qt and PipeWire show "rukia".
@@ -182,6 +196,37 @@ func (e *Engine) Running() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.running
+}
+
+// SetTokenProvider configures a function to fetch a fresh OAuth access token on restart.
+func (e *Engine) SetTokenProvider(provider func(context.Context) (string, error)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.tokenProvider = provider
+}
+
+// Restart stops any terminated or active run, fetches a fresh access token if a
+// provider is configured, and starts a new daemon instance.
+func (e *Engine) Restart(ctx context.Context) error {
+	if err := e.close(ctx); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	username := e.username
+	token := e.accessToken
+	provider := e.tokenProvider
+	e.mu.Unlock()
+
+	if provider != nil {
+		freshToken, err := provider(ctx)
+		if err != nil {
+			return fmt.Errorf("refreshing audio engine token: %w", err)
+		}
+		if freshToken != "" {
+			token = freshToken
+		}
+	}
+	return e.Start(ctx, username, token)
 }
 
 // defaultCacheDir resolves the directory for librespot daemon state and cache.

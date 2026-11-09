@@ -143,10 +143,43 @@ func (t *requestBoundOAuthTransport) RoundTrip(req *http.Request) (*http.Respons
 	if err != nil {
 		return nil, err
 	}
+	canRetry := req.Body == nil || req.GetBody != nil
+	clone, err := cloneRequestWithToken(req, tok, false)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := t.base.RoundTrip(clone)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized || !canRetry {
+		return resp, err
+	}
+
+	t.source.invalidateToken(tok.AccessToken)
+	refreshedTok, refreshErr := t.source.TokenContext(req.Context())
+	if refreshErr != nil {
+		_ = resp.Body.Close()
+		return nil, refreshErr
+	}
+	retryClone, cloneErr := cloneRequestWithToken(req, refreshedTok, true)
+	if cloneErr != nil {
+		_ = resp.Body.Close()
+		return nil, cloneErr
+	}
+	_ = resp.Body.Close()
+	return t.base.RoundTrip(retryClone)
+}
+
+func cloneRequestWithToken(req *http.Request, tok *oauth2.Token, rewindBody bool) (*http.Request, error) {
 	clone := req.Clone(req.Context())
 	clone.Header = req.Header.Clone()
+	if rewindBody && req.Body != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		clone.Body = body
+	}
 	tok.SetAuthHeader(clone)
-	return t.base.RoundTrip(clone)
+	return clone, nil
 }
 
 type persistingTokenSource struct {
@@ -207,6 +240,9 @@ func (p *persistingTokenSource) TokenContext(ctx context.Context) (*oauth2.Token
 		if ctxErr := refreshCtx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
+		if isInvalidGrant(err) {
+			return nil, fmt.Errorf("%w: %w", ErrReauthenticationRequired, err)
+		}
 		return nil, err
 	}
 	if tok.RefreshToken == "" && previous != nil && previous.RefreshToken != "" {
@@ -242,6 +278,19 @@ func (p *persistingTokenSource) validCachedToken() *oauth2.Token {
 	}
 	copy := *p.lastTok
 	return &copy
+}
+
+func (p *persistingTokenSource) invalidateToken(accessToken string) {
+	if accessToken == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastTok != nil && p.lastTok.AccessToken == accessToken {
+		invalidated := *p.lastTok
+		invalidated.Expiry = time.Unix(1, 0)
+		p.lastTok = &invalidated
+	}
 }
 
 // RunInteractiveLogin runs the full authorization code flow:
@@ -335,9 +384,7 @@ func (o *OAuthFlow) SilentRefresh(ctx context.Context) (*oauth2.Token, error) {
 		if err := refreshCtx.Err(); err != nil {
 			return nil, fmt.Errorf("failed to refresh Spotify session: %w", err)
 		}
-		var retrieveErr *oauth2.RetrieveError
-		if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" &&
-			(retrieveErr.Response == nil || retrieveErr.Response.StatusCode != http.StatusTooManyRequests && retrieveErr.Response.StatusCode < http.StatusInternalServerError) {
+		if isInvalidGrant(err) {
 			return nil, ErrReauthenticationRequired
 		}
 		return nil, fmt.Errorf("failed to refresh Spotify session: %w", err)
@@ -424,4 +471,10 @@ func cfgDirDisplay() string {
 		return "~/.config/rukia/player/config.json"
 	}
 	return p
+}
+
+func isInvalidGrant(err error) bool {
+	var retrieveErr *oauth2.RetrieveError
+	return errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" &&
+		(retrieveErr.Response == nil || retrieveErr.Response.StatusCode != http.StatusTooManyRequests && retrieveErr.Response.StatusCode < http.StatusInternalServerError)
 }
