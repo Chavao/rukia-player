@@ -27,6 +27,7 @@ type playerReconnectedMsg struct {
 type errMsg struct{ err error }
 
 var playerReconnectBaseDelay = time.Second
+
 type playbackChangedMsg struct {
 	version uint64
 	playing bool
